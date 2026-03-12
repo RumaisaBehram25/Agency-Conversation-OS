@@ -1,0 +1,139 @@
+"""
+Attora — FastAPI Application
+
+Main application entry point. Configures middleware, CORS, routes,
+error handling, and lifecycle events.
+"""
+
+import logging
+import uuid
+from contextlib import asynccontextmanager
+from collections.abc import AsyncGenerator
+
+from fastapi import FastAPI, Request
+from fastapi.exceptions import RequestValidationError
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from starlette.exceptions import HTTPException as StarletteHTTPException
+
+from app.config import settings
+from app.redis import close_redis, init_redis
+from app.api import api_router
+from app.middleware.rate_limit import RateLimitMiddleware
+
+# ── Logging ──────────────────────────────────────────────────
+
+logging.basicConfig(
+    level=getattr(logging, settings.log_level.upper(), logging.INFO),
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+)
+logger = logging.getLogger("attora")
+
+
+# ── Lifecycle ────────────────────────────────────────────────
+
+@asynccontextmanager
+async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
+    """Application startup and shutdown lifecycle."""
+    # Startup
+    logger.info(f"Starting {settings.app_name} ({settings.app_env})")
+
+    # Initialize Redis
+    try:
+        await init_redis()
+        logger.info("Redis connection pool initialized")
+    except Exception as e:
+        logger.warning(f"Redis connection failed (non-fatal): {e}")
+
+    yield
+
+    # Shutdown
+    logger.info("Shutting down...")
+    await close_redis()
+    logger.info("Redis connection pool closed")
+
+
+# ── App ──────────────────────────────────────────────────────
+
+app = FastAPI(
+    title=settings.app_name,
+    description="White-Labeled ManyChat Platform with AI Conversation Engine",
+    version="1.0.0",
+    docs_url="/api/docs" if settings.debug else None,
+    redoc_url="/api/redoc" if settings.debug else None,
+    openapi_url="/api/openapi.json" if settings.debug else None,
+    lifespan=lifespan,
+)
+
+
+# ── Middleware (order matters — last added = first executed) ──
+
+# Rate limiting
+app.add_middleware(RateLimitMiddleware)
+
+# CORS
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=settings.cors_origins_list,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+    expose_headers=["X-Request-ID", "X-RateLimit-Limit", "X-RateLimit-Remaining"],
+)
+
+
+# ── Request ID Middleware ────────────────────────────────────
+
+@app.middleware("http")
+async def add_request_id(request: Request, call_next):
+    """Add a unique X-Request-ID header to every request/response."""
+    request_id = request.headers.get("X-Request-ID", str(uuid.uuid4()))
+    response = await call_next(request)
+    response.headers["X-Request-ID"] = request_id
+    return response
+
+
+# ── Error Handlers ───────────────────────────────────────────
+
+@app.exception_handler(StarletteHTTPException)
+async def http_exception_handler(request: Request, exc: StarletteHTTPException) -> JSONResponse:
+    """Handle HTTP exceptions with consistent JSON format."""
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={
+            "detail": exc.detail,
+            "status_code": exc.status_code,
+        },
+        headers=getattr(exc, "headers", None),
+    )
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError) -> JSONResponse:
+    """Handle validation errors with consistent JSON format."""
+    return JSONResponse(
+        status_code=422,
+        content={
+            "detail": "Validation error",
+            "status_code": 422,
+            "errors": exc.errors(),
+        },
+    )
+
+
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+    """Catch-all for unhandled exceptions — never leak stack traces."""
+    logger.exception(f"Unhandled error on {request.method} {request.url.path}: {exc}")
+    return JSONResponse(
+        status_code=500,
+        content={
+            "detail": "Internal server error",
+            "status_code": 500,
+        },
+    )
+
+
+# ── Routes ───────────────────────────────────────────────────
+
+app.include_router(api_router, prefix="/api")

@@ -1,0 +1,33 @@
+# ============================================
+# Attora Backend — Python Dependencies
+# ============================================
+
+# Web Framework
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+pydantic[email]==2.10.4
+pydantic-settings==2.7.1
+
+# Database
+sqlalchemy[asyncio]==2.0.36
+asyncpg==0.30.0
+alembic==1.14.1
+greenlet==3.1.1
+
+# Redis
+redis[hiredis]==5.2.1
+
+# Authentication
+passlib[bcrypt]==1.7.4
+python-jose[cryptography]==3.3.0
+bcrypt==4.2.1
+
+# Encryption
+cryptography==44.0.0
+
+# HTTP
+httpx==0.28.1
+
+# Utilities
+python-multipart==0.0.20
+python-dotenv==1.0.1

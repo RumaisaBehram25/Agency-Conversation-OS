@@ -1,7 +1,7 @@
 """
-Attora — AI Engine Services
+Attora — Service Layer
 
-Core services for the AI conversation pipeline: config loading,
-prompt building, intent classification, response generation,
-output validation, buyer stage tracking, and context management.
+AI engine services (config loading, prompt building, classification,
+response generation, validation, buyer stage, context management)
+and business logic services (analytics) used by API routes.
 """

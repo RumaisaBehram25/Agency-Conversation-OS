@@ -46,6 +46,9 @@ class Settings(BaseSettings):
     # ── Rate Limiting ────────────────────────────────────────
     rate_limit_per_minute: int = 100
 
+    # ── AI / Anthropic ────────────────────────────────────────
+    anthropic_api_key: str = ""
+
     @property
     def cors_origins_list(self) -> list[str]:
         """Parse CORS origins from comma-separated string."""

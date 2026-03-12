@@ -28,6 +28,9 @@ cryptography==44.0.0
 # HTTP
 httpx==0.28.1
 
+# AI / Anthropic
+anthropic==0.42.0
+
 # Utilities
 python-multipart==0.0.20
 python-dotenv==1.0.1

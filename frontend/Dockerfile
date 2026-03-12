@@ -1,7 +1,23 @@
 # ============================================
-# Attora Frontend — Nginx Placeholder
-# (Real React frontend will be built in feature-004)
+# Attora Frontend — Multi-stage Docker Build
+# Stage 1: Build React app with Node
+# Stage 2: Serve with nginx
 # ============================================
+
+# ─── Stage 1: Build ──────────────────────────
+FROM node:20-alpine AS builder
+
+WORKDIR /app
+
+# Install dependencies first for better caching
+COPY package.json ./
+RUN npm install --legacy-peer-deps
+
+# Copy source and build
+COPY . .
+RUN npm run build
+
+# ─── Stage 2: Serve ──────────────────────────
 FROM nginx:1.27-alpine
 
 # Remove default nginx config
@@ -10,10 +26,8 @@ RUN rm /etc/nginx/conf.d/default.conf
 # Copy custom nginx config
 COPY nginx.conf /etc/nginx/conf.d/default.conf
 
-# Create placeholder index page
-RUN mkdir -p /usr/share/nginx/html && \
-    echo '<!DOCTYPE html><html><head><title>Attora</title></head><body><h1>Attora MVP</h1><p>Frontend placeholder. The React dashboard will be built in feature-004.</p></body></html>' \
-    > /usr/share/nginx/html/index.html
+# Copy built assets from builder stage
+COPY --from=builder /app/dist /usr/share/nginx/html
 
 EXPOSE 80
 

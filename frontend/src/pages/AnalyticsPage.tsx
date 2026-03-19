@@ -163,25 +163,25 @@ export default function AnalyticsPage() {
                 <div>
                   <p className="text-xs text-gray-500">Fallback Rate</p>
                   <p className="text-xl font-bold text-gray-900">
-                    {formatPercentRaw(aiPerf.fallback_rate * 100)}
+                    {aiPerf.fallback_rate != null ? formatPercentRaw(aiPerf.fallback_rate * 100) : '—'}
                   </p>
                 </div>
                 <div>
                   <p className="text-xs text-gray-500">Avg Response Time</p>
                   <p className="text-xl font-bold text-gray-900">
-                    {formatDuration(aiPerf.avg_response_time_ms)}
+                    {aiPerf.avg_response_time_ms != null ? formatDuration(aiPerf.avg_response_time_ms) : '—'}
                   </p>
                 </div>
                 <div>
                   <p className="text-xs text-gray-500">Total AI Tokens</p>
                   <p className="text-xl font-bold text-gray-900">
-                    {aiPerf.total_ai_tokens.toLocaleString()}
+                    {(aiPerf.total_ai_tokens ?? 0).toLocaleString()}
                   </p>
                 </div>
                 <div>
                   <p className="text-xs text-gray-500">Total AI Cost</p>
                   <p className="text-xl font-bold text-gray-900">
-                    {formatCurrency(aiPerf.total_ai_cost)}
+                    {formatCurrency(aiPerf.total_ai_cost ?? 0)}
                   </p>
                 </div>
               </div>

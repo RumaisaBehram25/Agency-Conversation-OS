@@ -71,37 +71,37 @@ export default function ROIWaterfall({ roi }: ROIWaterfallProps) {
         <div>
           <p className="text-xs text-gray-500">Cost/Conversation</p>
           <p className="text-sm font-semibold text-gray-900">
-            {formatCurrency(roi.cost_per_conversation)}
+            {roi.cost_per_conversation != null ? formatCurrency(roi.cost_per_conversation) : '—'}
           </p>
         </div>
         <div>
           <p className="text-xs text-gray-500">Cost/Qualified</p>
           <p className="text-sm font-semibold text-gray-900">
-            {formatCurrency(roi.cost_per_qualified)}
+            {roi.cost_per_qualified != null ? formatCurrency(roi.cost_per_qualified) : '—'}
           </p>
         </div>
         <div>
           <p className="text-xs text-gray-500">CPA</p>
           <p className="text-sm font-semibold text-gray-900">
-            {formatCurrency(roi.cpa)}
+            {roi.cpa != null ? formatCurrency(roi.cpa) : '—'}
           </p>
         </div>
         <div>
           <p className="text-xs text-gray-500">ROAS</p>
           <p className="text-sm font-semibold text-gray-900">
-            {roi.roas.toFixed(2)}x
+            {roi.roas != null ? `${roi.roas.toFixed(2)}x` : '—'}
           </p>
         </div>
         <div>
           <p className="text-xs text-gray-500">Revenue</p>
           <p className="text-sm font-semibold text-green-700">
-            {formatCurrency(roi.revenue)}
+            {formatCurrency(roi.revenue ?? 0)}
           </p>
         </div>
       </div>
 
       {/* Before vs After */}
-      {(roi.baseline_cpa > 0 || roi.current_cpa > 0) && (
+      {((roi.baseline_cpa ?? 0) > 0 || (roi.current_cpa ?? 0) > 0) && (
         <div className="mt-6 border-t border-gray-200 pt-4">
           <h4 className="text-xs font-semibold text-gray-700 uppercase tracking-wider mb-3">
             Before vs After Comparison

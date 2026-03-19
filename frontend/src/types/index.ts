@@ -173,9 +173,9 @@ export interface DailyTrend {
 }
 
 export interface FunnelStep {
-  stage: string;
-  count: number;
-  percentage: number;
+  name: string;
+  volume: number;
+  drop_off_rate: number | null;
 }
 
 export interface AnalyticsResponse {

@@ -8,7 +8,7 @@ from typing import Sequence, Union
 
 from alembic import op
 import sqlalchemy as sa
-from sqlalchemy.dialects.postgresql import ARRAY, JSONB, UUID
+from sqlalchemy.dialects.postgresql import ARRAY, ENUM, JSONB, UUID
 
 # revision identifiers, used by Alembic.
 revision: str = "001"
@@ -18,42 +18,27 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    # ── Create Enums ─────────────────────────────────────────
-    buyer_stage_enum = sa.Enum(
-        "awareness", "consideration", "intent", "purchase", "post_purchase",
-        name="buyer_stage",
-    )
-    buyer_stage_enum.create(op.get_bind(), checkfirst=True)
+    # ── Create Enums via DO blocks (handles pre-existing types gracefully) ──
+    for name, values in [
+        ("buyer_stage", "'awareness', 'consideration', 'intent', 'purchase', 'post_purchase'"),
+        ("conversation_status", "'active', 'converted', 'stale', 'closed'"),
+        ("message_sender", "'user', 'ai', 'human'"),
+        ("channel_type", "'whatsapp', 'messenger', 'instagram'"),
+        ("conversion_type", "'lead', 'initiate_checkout', 'purchase', 'upsell'"),
+        ("user_role", "'owner', 'admin', 'member', 'viewer'"),
+    ]:
+        op.execute(sa.text(
+            f"DO $$ BEGIN CREATE TYPE {name} AS ENUM ({values}); "
+            f"EXCEPTION WHEN duplicate_object THEN null; END $$;"
+        ))
 
-    conversation_status_enum = sa.Enum(
-        "active", "converted", "stale", "closed",
-        name="conversation_status",
-    )
-    conversation_status_enum.create(op.get_bind(), checkfirst=True)
-
-    message_sender_enum = sa.Enum(
-        "user", "ai", "human",
-        name="message_sender",
-    )
-    message_sender_enum.create(op.get_bind(), checkfirst=True)
-
-    channel_type_enum = sa.Enum(
-        "whatsapp", "messenger", "instagram",
-        name="channel_type",
-    )
-    channel_type_enum.create(op.get_bind(), checkfirst=True)
-
-    conversion_type_enum = sa.Enum(
-        "lead", "initiate_checkout", "purchase", "upsell",
-        name="conversion_type",
-    )
-    conversion_type_enum.create(op.get_bind(), checkfirst=True)
-
-    user_role_enum = sa.Enum(
-        "owner", "admin", "member", "viewer",
-        name="user_role",
-    )
-    user_role_enum.create(op.get_bind(), checkfirst=True)
+    # Use postgresql.ENUM with create_type=False so create_table doesn't try to recreate them
+    buyer_stage_enum = ENUM("awareness", "consideration", "intent", "purchase", "post_purchase", name="buyer_stage", create_type=False)
+    conversation_status_enum = ENUM("active", "converted", "stale", "closed", name="conversation_status", create_type=False)
+    message_sender_enum = ENUM("user", "ai", "human", name="message_sender", create_type=False)
+    channel_type_enum = ENUM("whatsapp", "messenger", "instagram", name="channel_type", create_type=False)
+    conversion_type_enum = ENUM("lead", "initiate_checkout", "purchase", "upsell", name="conversion_type", create_type=False)
+    user_role_enum = ENUM("owner", "admin", "member", "viewer", name="user_role", create_type=False)
 
     # ── Organizations ────────────────────────────────────────
     op.create_table(
@@ -296,9 +281,5 @@ def downgrade() -> None:
     op.drop_table("organizations")
 
     # Drop enums
-    sa.Enum(name="user_role").drop(op.get_bind(), checkfirst=True)
-    sa.Enum(name="conversion_type").drop(op.get_bind(), checkfirst=True)
-    sa.Enum(name="channel_type").drop(op.get_bind(), checkfirst=True)
-    sa.Enum(name="message_sender").drop(op.get_bind(), checkfirst=True)
-    sa.Enum(name="conversation_status").drop(op.get_bind(), checkfirst=True)
-    sa.Enum(name="buyer_stage").drop(op.get_bind(), checkfirst=True)
+    for name in ["user_role", "conversion_type", "channel_type", "message_sender", "conversation_status", "buyer_stage"]:
+        op.execute(sa.text(f"DROP TYPE IF EXISTS {name}"))

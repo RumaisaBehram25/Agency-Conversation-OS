@@ -7,6 +7,15 @@ interface LeadProfileProps {
   lead: SubscriberDetail;
 }
 
+function displayName(lead: SubscriberDetail): string {
+  const parts = [lead.first_name, lead.last_name].filter(Boolean);
+  return parts.length > 0 ? parts.join(' ') : 'Unknown';
+}
+
+function displayInitial(lead: SubscriberDetail): string {
+  return lead.first_name?.charAt(0)?.toUpperCase() || lead.last_name?.charAt(0)?.toUpperCase() || '?';
+}
+
 export default function LeadProfile({ lead }: LeadProfileProps) {
   const navigate = useNavigate();
 
@@ -17,11 +26,11 @@ export default function LeadProfile({ lead }: LeadProfileProps) {
         <div className="card">
           <div className="flex items-center gap-4 mb-4">
             <div className="flex h-14 w-14 items-center justify-center rounded-full bg-primary-100 text-xl font-bold text-primary-700">
-              {lead.name?.charAt(0)?.toUpperCase() || '?'}
+              {displayInitial(lead)}
             </div>
             <div>
               <h2 className="text-lg font-semibold text-gray-900">
-                {lead.name || 'Unknown'}
+                {displayName(lead)}
               </h2>
               <div className="flex items-center gap-2 mt-1">
                 <Badge color={channelBadgeColor(lead.channel)}>{lead.channel}</Badge>
@@ -36,16 +45,16 @@ export default function LeadProfile({ lead }: LeadProfileProps) {
 
           <dl className="space-y-3">
             <div>
-              <dt className="text-xs text-gray-500">External ID</dt>
-              <dd className="text-sm font-mono text-gray-700">{lead.external_id}</dd>
+              <dt className="text-xs text-gray-500">ManyChat ID</dt>
+              <dd className="text-sm font-mono text-gray-700">{lead.manychat_subscriber_id}</dd>
             </div>
             <div>
               <dt className="text-xs text-gray-500">First Contact</dt>
-              <dd className="text-sm text-gray-700">{formatDate(lead.first_contact_at)}</dd>
+              <dd className="text-sm text-gray-700">{lead.first_message_at ? formatDate(lead.first_message_at) : '—'}</dd>
             </div>
             <div>
               <dt className="text-xs text-gray-500">Last Contact</dt>
-              <dd className="text-sm text-gray-700">{formatDate(lead.last_contact_at)}</dd>
+              <dd className="text-sm text-gray-700">{lead.last_message_at ? formatDate(lead.last_message_at) : '—'}</dd>
             </div>
           </dl>
         </div>
@@ -71,29 +80,22 @@ export default function LeadProfile({ lead }: LeadProfileProps) {
         )}
 
         {/* Objections */}
-        {lead.objections && lead.objections.length > 0 && (
+        {lead.objections_raised && lead.objections_raised.length > 0 && (
           <div className="card">
             <h3 className="text-sm font-semibold text-gray-900 mb-3">Objections</h3>
             <div className="flex flex-wrap gap-2">
-              {lead.objections.map((objection, i) => (
+              {lead.objections_raised.map((objection, i) => (
                 <Badge key={i} color="yellow">{objection}</Badge>
               ))}
             </div>
           </div>
         )}
 
-        {/* Custom Fields */}
-        {lead.custom_fields && Object.keys(lead.custom_fields).length > 0 && (
+        {/* Conversation Summary */}
+        {lead.conversation_summary && (
           <div className="card">
-            <h3 className="text-sm font-semibold text-gray-900 mb-3">Custom Fields</h3>
-            <dl className="space-y-2">
-              {Object.entries(lead.custom_fields).map(([key, value]) => (
-                <div key={key}>
-                  <dt className="text-xs text-gray-500">{key}</dt>
-                  <dd className="text-sm text-gray-700">{value}</dd>
-                </div>
-              ))}
-            </dl>
+            <h3 className="text-sm font-semibold text-gray-900 mb-3">AI Summary</h3>
+            <p className="text-sm text-gray-700">{lead.conversation_summary}</p>
           </div>
         )}
       </div>
@@ -117,9 +119,7 @@ export default function LeadProfile({ lead }: LeadProfileProps) {
                   <div>
                     <div className="flex items-center gap-2">
                       <Badge color={statusBadgeColor(conv.status)}>{conv.status}</Badge>
-                      <Badge color={buyerStageBadgeColor(conv.buyer_stage)}>
-                        {conv.buyer_stage}
-                      </Badge>
+                      <Badge color={channelBadgeColor(conv.channel)}>{conv.channel}</Badge>
                     </div>
                     <p className="mt-1 text-xs text-gray-500">
                       {conv.message_count} messages
@@ -127,10 +127,10 @@ export default function LeadProfile({ lead }: LeadProfileProps) {
                   </div>
                   <div className="text-right">
                     <p className="text-sm text-gray-700">
-                      {formatDateTime(conv.created_at)}
+                      {conv.started_at ? formatDateTime(conv.started_at) : '—'}
                     </p>
                     <p className="text-xs text-gray-500">
-                      Last: {formatDateTime(conv.last_message_at)}
+                      Last: {conv.last_activity_at ? formatDateTime(conv.last_activity_at) : '—'}
                     </p>
                   </div>
                 </div>

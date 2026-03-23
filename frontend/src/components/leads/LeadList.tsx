@@ -7,6 +7,15 @@ interface LeadListProps {
   leads: SubscriberListItem[];
 }
 
+function displayName(lead: SubscriberListItem): string {
+  const parts = [lead.first_name, lead.last_name].filter(Boolean);
+  return parts.length > 0 ? parts.join(' ') : 'Unknown';
+}
+
+function displayInitial(lead: SubscriberListItem): string {
+  return lead.first_name?.charAt(0)?.toUpperCase() || lead.last_name?.charAt(0)?.toUpperCase() || '?';
+}
+
 export default function LeadList({ leads }: LeadListProps) {
   const navigate = useNavigate();
 
@@ -42,7 +51,7 @@ export default function LeadList({ leads }: LeadListProps) {
               Conversion
             </th>
             <th className="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
-              Conversations
+              Messages
             </th>
           </tr>
         </thead>
@@ -56,14 +65,11 @@ export default function LeadList({ leads }: LeadListProps) {
               <td className="whitespace-nowrap px-6 py-4">
                 <div className="flex items-center">
                   <div className="flex h-8 w-8 items-center justify-center rounded-full bg-primary-100 text-sm font-medium text-primary-700">
-                    {lead.name?.charAt(0)?.toUpperCase() || '?'}
+                    {displayInitial(lead)}
                   </div>
                   <div className="ml-3">
                     <p className="text-sm font-medium text-gray-900">
-                      {lead.name || 'Unknown'}
-                    </p>
-                    <p className="text-xs text-gray-500 font-mono">
-                      {lead.external_id}
+                      {displayName(lead)}
                     </p>
                   </div>
                 </div>
@@ -74,10 +80,10 @@ export default function LeadList({ leads }: LeadListProps) {
                 </Badge>
               </td>
               <td className="whitespace-nowrap px-6 py-4 text-sm text-gray-500">
-                {formatDate(lead.first_contact_at)}
+                {lead.first_message_at ? formatDate(lead.first_message_at) : '—'}
               </td>
               <td className="whitespace-nowrap px-6 py-4 text-sm text-gray-500">
-                {formatDate(lead.last_contact_at)}
+                {lead.last_message_at ? formatDate(lead.last_message_at) : '—'}
               </td>
               <td className="whitespace-nowrap px-6 py-4">
                 <Badge color={buyerStageBadgeColor(lead.buyer_stage)}>
@@ -92,7 +98,7 @@ export default function LeadList({ leads }: LeadListProps) {
                 )}
               </td>
               <td className="whitespace-nowrap px-6 py-4 text-sm text-gray-500">
-                {lead.conversation_count}
+                {lead.total_messages}
               </td>
             </tr>
           ))}

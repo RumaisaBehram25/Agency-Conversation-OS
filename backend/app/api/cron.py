@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.database import get_db
+from app.jobs.ad_spend_sync import sync_ad_spend
 from app.jobs.daily_digest import aggregate_daily_analytics
 from app.jobs.stale_conversations import mark_stale_conversations
 
@@ -56,3 +57,18 @@ async def cron_daily_digest(
     Protected by CRON_SECRET header. Defaults to aggregating yesterday's data.
     """
     return await aggregate_daily_analytics(db, target_date)
+
+
+@router.post("/ad-spend-sync")
+async def cron_ad_spend_sync(
+    _: None = Depends(verify_cron_secret),
+    db: AsyncSession = Depends(get_db),
+    days_back: int = Query(7, description="Number of days to sync (default 7)"),
+) -> dict:
+    """
+    Pull ad spend from Meta Marketing API and upsert into daily_analytics.
+
+    Fetches the last N days of spend data for all orgs with a configured
+    meta_ad_account_id. Protected by CRON_SECRET header.
+    """
+    return await sync_ad_spend(db, days_back=days_back)

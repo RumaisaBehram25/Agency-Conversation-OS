@@ -257,6 +257,11 @@ async def _get_or_create_subscriber(
     subscriber = result.scalar_one_or_none()
 
     if subscriber:
+        # Update name if available and not already set
+        if custom_fields.get("first_name") and not subscriber.first_name:
+            subscriber.first_name = custom_fields["first_name"]
+        if custom_fields.get("last_name") and not subscriber.last_name:
+            subscriber.last_name = custom_fields["last_name"]
         # Update attribution if available
         if custom_fields.get("ctwa_clid") and not subscriber.ctwa_clid:
             subscriber.ctwa_clid = custom_fields["ctwa_clid"]
@@ -278,6 +283,8 @@ async def _get_or_create_subscriber(
         org_id=org_id,
         manychat_subscriber_id=manychat_subscriber_id,
         channel=channel_enum,
+        first_name=custom_fields.get("first_name"),
+        last_name=custom_fields.get("last_name"),
         buyer_stage=BuyerStage.AWARENESS,
         first_message_at=datetime.now(timezone.utc),
         ctwa_clid=custom_fields.get("ctwa_clid"),

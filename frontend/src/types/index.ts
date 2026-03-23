@@ -131,37 +131,47 @@ export interface PaginatedResponse<T> {
 
 export interface SubscriberListItem {
   id: string;
-  external_id: string;
-  name: string;
+  first_name: string | null;
+  last_name: string | null;
   channel: string;
   buyer_stage: string;
   is_converted: boolean;
-  first_contact_at: string;
-  last_contact_at: string;
-  conversation_count: number;
+  conversion_value: number | null;
+  total_messages: number;
+  first_message_at: string | null;
+  last_message_at: string | null;
+  created_at: string;
 }
 
 export interface SubscriberConversation {
   id: string;
+  channel: string;
   status: string;
-  buyer_stage: string;
   message_count: number;
-  last_message_at: string;
-  created_at: string;
+  started_at: string | null;
+  last_activity_at: string | null;
 }
 
 export interface SubscriberDetail {
   id: string;
-  external_id: string;
-  name: string;
+  manychat_subscriber_id: string;
   channel: string;
+  first_name: string | null;
+  last_name: string | null;
+  phone: string | null;
+  email: string | null;
   buyer_stage: string;
+  interests: string[] | null;
+  objections_raised: string[] | null;
+  conversation_summary: string | null;
   is_converted: boolean;
-  interests: string[];
-  objections: string[];
-  custom_fields: Record<string, string>;
-  first_contact_at: string;
-  last_contact_at: string;
+  conversion_value: number | null;
+  converted_at: string | null;
+  first_message_at: string | null;
+  last_message_at: string | null;
+  total_messages: number;
+  created_at: string;
+  updated_at: string;
   conversations: SubscriberConversation[];
 }
 

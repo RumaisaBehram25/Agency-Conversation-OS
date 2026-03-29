@@ -262,6 +262,11 @@ async def _get_or_create_subscriber(
             subscriber.first_name = custom_fields["first_name"]
         if custom_fields.get("last_name") and not subscriber.last_name:
             subscriber.last_name = custom_fields["last_name"]
+        # Update contact info if available
+        if custom_fields.get("email") and not subscriber.email:
+            subscriber.email = custom_fields["email"]
+        if custom_fields.get("phone") and not subscriber.phone:
+            subscriber.phone = custom_fields["phone"]
         # Update attribution if available
         if custom_fields.get("ctwa_clid") and not subscriber.ctwa_clid:
             subscriber.ctwa_clid = custom_fields["ctwa_clid"]
@@ -285,6 +290,8 @@ async def _get_or_create_subscriber(
         channel=channel_enum,
         first_name=custom_fields.get("first_name"),
         last_name=custom_fields.get("last_name"),
+        email=custom_fields.get("email"),
+        phone=custom_fields.get("phone"),
         buyer_stage=BuyerStage.AWARENESS,
         first_message_at=datetime.now(timezone.utc),
         ctwa_clid=custom_fields.get("ctwa_clid"),

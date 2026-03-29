@@ -175,6 +175,63 @@ export interface SubscriberDetail {
   conversations: SubscriberConversation[];
 }
 
+// ─── Campaigns ──────────────────────────────────────────────────────────────
+
+export interface CampaignSummary {
+  meta_campaign_id: string;
+  meta_campaign_name: string | null;
+  status: string | null;
+  spend: number;
+  impressions: number;
+  clicks: number;
+  leads: number;
+  link_clicks: number;
+  video_views: number;
+  cpc: number | null;
+  cpm: number | null;
+  ctr: number | null;
+}
+
+export interface AdSetSummary {
+  meta_adset_id: string;
+  meta_adset_name: string | null;
+  status: string | null;
+  spend: number;
+  impressions: number;
+  clicks: number;
+  leads: number;
+  link_clicks: number;
+  video_views: number;
+  cpc: number | null;
+  cpm: number | null;
+  ctr: number | null;
+}
+
+export interface AdSummary {
+  meta_ad_id: string;
+  meta_ad_name: string | null;
+  status: string | null;
+  spend: number;
+  impressions: number;
+  clicks: number;
+  leads: number;
+  link_clicks: number;
+  video_views: number;
+  cpc: number | null;
+  cpm: number | null;
+  ctr: number | null;
+}
+
+// ─── Breakdowns ─────────────────────────────────────────────────────────────
+
+export interface BreakdownItem {
+  breakdown_key: string;
+  spend: number;
+  impressions: number;
+  clicks: number;
+  leads: number;
+}
+
 // ─── Analytics ───────────────────────────────────────────────────────────────
 
 export interface DailyTrend {

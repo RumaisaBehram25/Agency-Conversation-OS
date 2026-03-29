@@ -14,6 +14,7 @@ from app.models.conversation import Conversation
 from app.models.message import Message
 from app.models.conversion import ConversionEvent
 from app.models.analytics import DailyAnalytics
+from app.models.campaign_metrics import CampaignMetric, CampaignBreakdown
 
 __all__ = [
     "Base",
@@ -29,4 +30,6 @@ __all__ = [
     "Message",
     "ConversionEvent",
     "DailyAnalytics",
+    "CampaignMetric",
+    "CampaignBreakdown",
 ]

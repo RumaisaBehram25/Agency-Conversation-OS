@@ -204,6 +204,11 @@ def build_user_message(context: ConversationContext) -> str:
             "## CONVERSATION HISTORY\n" + "\n".join(history_lines)
         )
 
+    # General knowledge (retrieved from knowledge documents)
+    if context.retrieved_knowledge:
+        knowledge_text = "\n".join(context.retrieved_knowledge)
+        parts.append(f"## GENERAL KNOWLEDGE\n{knowledge_text}")
+
     # Current message
     parts.append(f"## CURRENT MESSAGE\n[USER]: {context.current_message}")
 

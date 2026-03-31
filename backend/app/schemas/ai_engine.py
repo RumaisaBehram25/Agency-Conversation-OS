@@ -91,6 +91,7 @@ class ConversationContext(BaseModel):
     history: list[MessageContext] = Field(default_factory=list)
     current_message: str
     message_count: int = 0
+    retrieved_knowledge: list[str] = Field(default_factory=list)
 
 
 # ── Client Configuration (cached) ────────────────────────────

@@ -204,5 +204,12 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+# Plan Cascade
+mega-plan.json
+.mega-status.json
+design_doc.json
+mega-findings.md
+.worktree/
 config.bat
 node_modules

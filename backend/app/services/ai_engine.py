@@ -33,6 +33,7 @@ from app.services.context_manager import (
     store_message_and_update_context,
 )
 from app.services.fallback import FallbackType, get_fallback_response
+from app.services.knowledge_retriever import retrieve_knowledge
 from app.services.output_validator import validate_output
 from app.services.response_generator import generate_response
 
@@ -130,6 +131,23 @@ async def _run_pipeline(
         f"Step 2 (context_load): {int((time.monotonic() - step_start) * 1000)}ms"
     )
 
+    # ── Step 2.5: Retrieve knowledge (<1s via Haiku) ──────────
+    if db is not None:
+        try:
+            step_start = time.monotonic()
+            knowledge = await retrieve_knowledge(
+                message=message,
+                buyer_stage=context.subscriber.buyer_stage,
+                db=db,
+            )
+            context.retrieved_knowledge = knowledge
+            logger.debug(
+                f"Step 2.5 (knowledge): {int((time.monotonic() - step_start) * 1000)}ms "
+                f"docs={len(knowledge)}"
+            )
+        except Exception as e:
+            logger.error(f"Knowledge retrieval failed, continuing pipeline: {e}")
+
     # ── Step 3: Classify intent (<500ms via Haiku) ─────────────
     step_start = time.monotonic()
     subscriber_brief = (
@@ -158,6 +176,7 @@ async def _run_pipeline(
                     user_message=message,
                     ai_response=ai_response,
                     redis_client=redis_client,
+                    classifier_usage=classification.usage,
                 )
             )
             return ai_response
@@ -227,6 +246,7 @@ async def _run_pipeline(
             user_message=message,
             ai_response=ai_response,
             redis_client=redis_client,
+            classifier_usage=classification.usage,
         )
     )
 

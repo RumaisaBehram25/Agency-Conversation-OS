@@ -18,7 +18,12 @@ import time
 import anthropic
 
 from app.config import settings
-from app.schemas.ai_engine import AIResponse, ConversationContext, OrgConfig
+from app.schemas.ai_engine import (
+    AIResponse,
+    ConversationContext,
+    OrgConfig,
+    TokenUsage,
+)
 from app.services.prompt_builder import build_system_prompt, build_user_message
 
 logger = logging.getLogger(__name__)
@@ -98,12 +103,8 @@ async def _call_sonnet(
         messages=[{"role": "user", "content": user_message}],
     )
 
-    # Extract token usage
-    tokens_used = 0
-    if response.usage:
-        tokens_used = (response.usage.input_tokens or 0) + (
-            response.usage.output_tokens or 0
-        )
+    usage = _extract_usage(response)
+    tokens_used = usage.input_tokens + usage.output_tokens
 
     # Parse JSON from response
     raw_text = response.content[0].text.strip()
@@ -119,6 +120,20 @@ async def _call_sonnet(
         compliance_flags=parsed.get("compliance_flags", []),
         model_used=_RESPONSE_MODEL,
         tokens_used=tokens_used,
+        usage=usage,
+    )
+
+
+def _extract_usage(response) -> TokenUsage:
+    u = getattr(response, "usage", None)
+    if u is None:
+        return TokenUsage(model=_RESPONSE_MODEL)
+    return TokenUsage(
+        model=_RESPONSE_MODEL,
+        input_tokens=getattr(u, "input_tokens", 0) or 0,
+        output_tokens=getattr(u, "output_tokens", 0) or 0,
+        cache_read_tokens=getattr(u, "cache_read_input_tokens", 0) or 0,
+        cache_creation_tokens=getattr(u, "cache_creation_input_tokens", 0) or 0,
     )
 
 

@@ -18,7 +18,12 @@ import time
 import anthropic
 
 from app.config import settings
-from app.schemas.ai_engine import ClassificationResult, IntentType, Sentiment
+from app.schemas.ai_engine import (
+    ClassificationResult,
+    IntentType,
+    Sentiment,
+    TokenUsage,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -116,6 +121,8 @@ async def _call_haiku_classifier(user_content: str) -> ClassificationResult:
         messages=[{"role": "user", "content": user_content}],
     )
 
+    usage = _extract_usage(response)
+
     # Parse JSON from response
     raw_text = response.content[0].text.strip()
 
@@ -150,6 +157,20 @@ async def _call_haiku_classifier(user_content: str) -> ClassificationResult:
         sentiment=sentiment,
         is_simple=data.get("is_simple", False),
         confidence=min(1.0, max(0.0, float(data.get("confidence", 0.5)))),
+        usage=usage,
+    )
+
+
+def _extract_usage(response) -> TokenUsage:
+    u = getattr(response, "usage", None)
+    if u is None:
+        return TokenUsage(model=_CLASSIFIER_MODEL)
+    return TokenUsage(
+        model=_CLASSIFIER_MODEL,
+        input_tokens=getattr(u, "input_tokens", 0) or 0,
+        output_tokens=getattr(u, "output_tokens", 0) or 0,
+        cache_read_tokens=getattr(u, "cache_read_input_tokens", 0) or 0,
+        cache_creation_tokens=getattr(u, "cache_creation_input_tokens", 0) or 0,
     )
 
 

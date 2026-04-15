@@ -22,6 +22,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.database import async_session_factory
+from app.models.ai_usage_event import AIUsageEvent
 from app.models.base import BuyerStage, ChannelType, ConversationStatus, MessageSender
 from app.models.conversation import Conversation
 from app.models.message import Message
@@ -31,6 +32,7 @@ from app.schemas.ai_engine import (
     ConversationContext,
     MessageContext,
     SubscriberContext,
+    TokenUsage,
 )
 
 logger = logging.getLogger(__name__)
@@ -125,6 +127,7 @@ async def store_message_and_update_context(
     ai_response: AIResponse,
     db: AsyncSession | None = None,
     redis_client=None,
+    classifier_usage: TokenUsage | None = None,
 ) -> None:
     """
     Store the message exchange and update subscriber/conversation.
@@ -170,6 +173,18 @@ async def store_message_and_update_context(
                 quick_replies=ai_response.suggested_quick_replies or None,
             )
             session.add(ai_msg)
+            await session.flush()
+
+            # ── Record AI usage events ─────────────────────────
+            org_uuid = uuid.UUID(context.org_id)
+            _record_usage_event(
+                session, org_uuid, conversation_id, ai_msg.id,
+                stage="classifier", usage=classifier_usage,
+            )
+            _record_usage_event(
+                session, org_uuid, conversation_id, ai_msg.id,
+                stage="response", usage=ai_response.usage,
+            )
 
             # ── Update conversation ────────────────────────────
             await session.execute(
@@ -240,6 +255,39 @@ async def store_message_and_update_context(
         logger.error(f"Failed to store message/update context: {e}", exc_info=True)
 
 
+def _record_usage_event(
+    session: AsyncSession,
+    org_id: uuid.UUID,
+    conversation_id: uuid.UUID,
+    message_id: uuid.UUID,
+    stage: str,
+    usage: TokenUsage | None,
+) -> None:
+    if usage is None or not usage.model:
+        return
+    total = (
+        usage.input_tokens
+        + usage.output_tokens
+        + usage.cache_read_tokens
+        + usage.cache_creation_tokens
+    )
+    if total == 0:
+        return
+    session.add(
+        AIUsageEvent(
+            org_id=org_id,
+            conversation_id=conversation_id,
+            message_id=message_id,
+            stage=stage,
+            model=usage.model,
+            input_tokens=usage.input_tokens,
+            output_tokens=usage.output_tokens,
+            cache_read_tokens=usage.cache_read_tokens,
+            cache_creation_tokens=usage.cache_creation_tokens,
+        )
+    )
+
+
 async def _get_or_create_subscriber(
     db: AsyncSession,
     org_id: uuid.UUID,
@@ -262,6 +310,11 @@ async def _get_or_create_subscriber(
             subscriber.first_name = custom_fields["first_name"]
         if custom_fields.get("last_name") and not subscriber.last_name:
             subscriber.last_name = custom_fields["last_name"]
+        # Update contact info if available
+        if custom_fields.get("email") and not subscriber.email:
+            subscriber.email = custom_fields["email"]
+        if custom_fields.get("phone") and not subscriber.phone:
+            subscriber.phone = custom_fields["phone"]
         # Update attribution if available
         if custom_fields.get("ctwa_clid") and not subscriber.ctwa_clid:
             subscriber.ctwa_clid = custom_fields["ctwa_clid"]
@@ -285,6 +338,8 @@ async def _get_or_create_subscriber(
         channel=channel_enum,
         first_name=custom_fields.get("first_name"),
         last_name=custom_fields.get("last_name"),
+        email=custom_fields.get("email"),
+        phone=custom_fields.get("phone"),
         buyer_stage=BuyerStage.AWARENESS,
         first_message_at=datetime.now(timezone.utc),
         ctwa_clid=custom_fields.get("ctwa_clid"),

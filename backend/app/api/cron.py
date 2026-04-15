@@ -64,11 +64,15 @@ async def cron_ad_spend_sync(
     _: None = Depends(verify_cron_secret),
     db: AsyncSession = Depends(get_db),
     days_back: int = Query(7, description="Number of days to sync (default 7)"),
+    granular: bool = Query(True, description="Pull campaign/adset/ad level metrics and breakdowns (default True)"),
 ) -> dict:
     """
     Pull ad spend from Meta Marketing API and upsert into daily_analytics.
 
+    When granular=True (default), also pulls campaign/adset/ad level metrics
+    and demographic breakdowns into campaign_metrics and campaign_breakdowns.
+
     Fetches the last N days of spend data for all orgs with a configured
     meta_ad_account_id. Protected by CRON_SECRET header.
     """
-    return await sync_ad_spend(db, days_back=days_back)
+    return await sync_ad_spend(db, days_back=days_back, granular=granular)

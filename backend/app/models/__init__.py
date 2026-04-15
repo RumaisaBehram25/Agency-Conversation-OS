@@ -14,6 +14,9 @@ from app.models.conversation import Conversation
 from app.models.message import Message
 from app.models.conversion import ConversionEvent
 from app.models.analytics import DailyAnalytics
+from app.models.campaign_metrics import CampaignMetric, CampaignBreakdown
+from app.models.knowledge_document import KnowledgeDocument
+from app.models.ai_usage_event import AIUsageEvent
 
 __all__ = [
     "Base",
@@ -29,4 +32,8 @@ __all__ = [
     "Message",
     "ConversionEvent",
     "DailyAnalytics",
+    "CampaignMetric",
+    "CampaignBreakdown",
+    "KnowledgeDocument",
+    "AIUsageEvent",
 ]

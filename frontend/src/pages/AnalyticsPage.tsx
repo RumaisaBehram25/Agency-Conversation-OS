@@ -1,11 +1,15 @@
 import { useEffect, useState, useCallback } from 'react';
 import { getAnalytics, getROI, getAIPerformance, getExportUrl } from '../api/analytics';
-import type { AnalyticsResponse, ROIResponse, AIPerformanceResponse } from '../types';
+import { getCampaigns } from '../api/campaigns';
+import type { AnalyticsResponse, ROIResponse, AIPerformanceResponse, CampaignSummary } from '../types';
 import AnalyticsMetricCards from '../components/analytics/MetricCards';
 import FunnelChart from '../components/analytics/FunnelChart';
 import TrendChart from '../components/analytics/TrendChart';
 import ROIWaterfall from '../components/analytics/ROIWaterfall';
+import BreakdownCharts from '../components/analytics/BreakdownCharts';
+import CampaignDrillDown from '../components/analytics/CampaignDrillDown';
 import DateRangePicker from '../components/ui/DateRangePicker';
+import Select from '../components/ui/Select';
 import Button from '../components/ui/Button';
 import LoadingSpinner from '../components/ui/LoadingSpinner';
 import { daysAgoISO, todayISO, formatPercentRaw, formatDuration, formatCurrency } from '../utils/formatters';
@@ -23,11 +27,21 @@ export default function AnalyticsPage() {
   const [dateFrom, setDateFrom] = useState(daysAgoISO(30));
   const [dateTo, setDateTo] = useState(todayISO());
 
+  const [campaigns, setCampaigns] = useState<CampaignSummary[]>([]);
+  const [selectedCampaign, setSelectedCampaign] = useState<string>('');
+
   const [analytics, setAnalytics] = useState<AnalyticsResponse | null>(null);
   const [roi, setRoi] = useState<ROIResponse | null>(null);
   const [aiPerf, setAiPerf] = useState<AIPerformanceResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+
+  // Fetch campaign list when date range changes
+  useEffect(() => {
+    getCampaigns({ date_from: dateFrom, date_to: dateTo })
+      .then(setCampaigns)
+      .catch(() => setCampaigns([]));
+  }, [dateFrom, dateTo]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -89,6 +103,16 @@ export default function AnalyticsPage() {
           </p>
         </div>
         <div className="flex items-center gap-3">
+          <Select
+            options={campaigns.map((c) => ({
+              value: c.meta_campaign_id,
+              label: `${c.meta_campaign_name || 'Unnamed'}${c.status ? ` (${c.status.charAt(0).toUpperCase() + c.status.slice(1)})` : ''}`,
+            }))}
+            placeholder="All Campaigns"
+            value={selectedCampaign}
+            onChange={(e) => setSelectedCampaign(e.target.value)}
+            className="w-56"
+          />
           <DateRangePicker
             dateFrom={dateFrom}
             dateTo={dateTo}
@@ -220,6 +244,30 @@ export default function AnalyticsPage() {
               )}
             </div>
           )}
+
+          {/* Demographic & Platform Breakdowns — only when a specific campaign is selected */}
+          {selectedCampaign && (
+            <BreakdownCharts
+              campaignId={selectedCampaign}
+              dateFrom={dateFrom}
+              dateTo={dateTo}
+            />
+          )}
+
+          {/* Campaign Drill-Down: ad sets and ads — only when a specific campaign is selected */}
+          {selectedCampaign && (() => {
+            const matchedCampaign = campaigns.find(
+              (c) => c.meta_campaign_id === selectedCampaign
+            );
+            return matchedCampaign ? (
+              <CampaignDrillDown
+                campaignId={selectedCampaign}
+                dateFrom={dateFrom}
+                dateTo={dateTo}
+                campaign={matchedCampaign}
+              />
+            ) : null;
+          })()}
         </div>
       )}
     </div>

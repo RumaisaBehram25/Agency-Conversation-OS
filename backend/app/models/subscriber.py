@@ -48,6 +48,7 @@ class Subscriber(Base, TimestampMixin, OrgScopedMixin):
     # ── Attribution ──────────────────────────────────────────
     ctwa_clid: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
     ad_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    post_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     ad_set_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     campaign_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
 

@@ -109,6 +109,7 @@ async def load_conversation_context(
         channel=channel,
         ctwa_clid=custom_fields.get("ctwa_clid") or subscriber.ctwa_clid,
         ad_id=custom_fields.get("ad_id") or subscriber.ad_id,
+        post_id=custom_fields.get("post_id") or subscriber.post_id,
     )
 
     return ConversationContext(
@@ -320,6 +321,8 @@ async def _get_or_create_subscriber(
             subscriber.ctwa_clid = custom_fields["ctwa_clid"]
         if custom_fields.get("ad_id") and not subscriber.ad_id:
             subscriber.ad_id = custom_fields["ad_id"]
+        if custom_fields.get("post_id") and not subscriber.post_id:
+            subscriber.post_id = custom_fields["post_id"]
         if custom_fields.get("ad_set_id") and not subscriber.ad_set_id:
             subscriber.ad_set_id = custom_fields["ad_set_id"]
         if custom_fields.get("campaign_id") and not subscriber.campaign_id:
@@ -344,6 +347,7 @@ async def _get_or_create_subscriber(
         first_message_at=datetime.now(timezone.utc),
         ctwa_clid=custom_fields.get("ctwa_clid"),
         ad_id=custom_fields.get("ad_id"),
+        post_id=custom_fields.get("post_id"),
         ad_set_id=custom_fields.get("ad_set_id"),
         campaign_id=custom_fields.get("campaign_id"),
     )

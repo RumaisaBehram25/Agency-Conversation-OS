@@ -38,6 +38,16 @@ class Sentiment(str, enum.Enum):
     NEGATIVE = "negative"
 
 
+class TokenUsage(BaseModel):
+    """Per-call Anthropic token usage for cost attribution."""
+
+    model: str | None = None
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cache_read_tokens: int = 0
+    cache_creation_tokens: int = 0
+
+
 class ClassificationResult(BaseModel):
     """Output of the Haiku intent classifier."""
 
@@ -53,6 +63,7 @@ class ClassificationResult(BaseModel):
     confidence: float = Field(
         default=0.5, ge=0.0, le=1.0, description="Classification confidence score"
     )
+    usage: TokenUsage | None = None
 
 
 # ── Conversation Context ──────────────────────────────────────
@@ -174,6 +185,7 @@ class AIResponse(BaseModel):
         default=0, description="Total response generation time in ms"
     )
     tokens_used: int = Field(default=0, description="Total tokens consumed")
+    usage: TokenUsage | None = None
     needs_human_handoff: bool = Field(
         default=False, description="Whether a human agent should take over"
     )

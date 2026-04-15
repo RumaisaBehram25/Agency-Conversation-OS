@@ -176,6 +176,7 @@ async def _run_pipeline(
                     user_message=message,
                     ai_response=ai_response,
                     redis_client=redis_client,
+                    classifier_usage=classification.usage,
                 )
             )
             return ai_response
@@ -245,6 +246,7 @@ async def _run_pipeline(
             user_message=message,
             ai_response=ai_response,
             redis_client=redis_client,
+            classifier_usage=classification.usage,
         )
     )
 

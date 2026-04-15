@@ -10,7 +10,7 @@ White-labeled ManyChat platform with an AI conversation engine and Revenue Activ
 │   ManyChat   │     │                                                          │
 │  (External   │────▶│  ┌─────────┐    ┌───────────┐    ┌────────────────────┐  │
 │   Request)   │◀────│  │  nginx   │───▶│  FastAPI   │───▶│  PostgreSQL 16     │  │
-│              │     │  │  :8080   │    │  :8000    │    │  :5432             │  │
+│              │     │  │  :3000   │    │  :8000    │    │  :5432             │  │
 └──────────────┘     │  └─────────┘    └─────┬─────┘    └────────────────────┘  │
                      │       │               │                                  │
 ┌──────────────┐     │  React SPA        ┌───┴───┐      ┌────────────────────┐  │
@@ -25,7 +25,7 @@ White-labeled ManyChat platform with an AI conversation engine and Revenue Activ
 | Service | Image | Port | Purpose |
 |---------|-------|------|---------|
 | `api` | Python 3.12 / uvicorn | 8000 | FastAPI backend |
-| `frontend` | nginx 1.27-alpine | 8080 | React SPA + reverse proxy |
+| `frontend` | nginx 1.27-alpine | 3000 | React SPA + reverse proxy |
 | `postgres` | postgres:16-alpine | 5432 | Primary database |
 | `redis` | redis:7-alpine | 6379 | Cache, rate limiting, session context |
 
@@ -75,9 +75,22 @@ docker-compose exec api alembic upgrade head
 
 This creates all 10 tables, 6 enums, and indexes.
 
-### 4. Access the app
+### 4. Seed the knowledge base
 
-- **Dashboard**: http://localhost:8080
+The seed script and PDF live outside the `backend/` build context, so copy them into the running `api` container first, then run. `psycopg2-binary` is needed because the script uses the sync SQLAlchemy driver.
+
+```bash
+docker cp scripts/seed_knowledge.py attora-api-1:/seed.py
+docker cp Overcome7Objections.pdf attora-api-1:/Overcome7Objections.pdf
+docker-compose exec api pip install psycopg2-binary
+docker-compose exec api python /seed.py
+```
+
+This parses `Overcome7Objections.pdf` into ~37 chunked documents with keyword tags and inserts them into the `knowledge_documents` table. The script is idempotent — safe to re-run.
+
+### 5. Access the app
+
+- **Dashboard**: http://localhost:3000
 - **API docs** (dev mode): http://localhost:8000/api/docs
 - **Health check**: http://localhost:8000/api/health
 
@@ -655,6 +668,8 @@ Vite dev server runs on `http://localhost:5173` with hot reload. API calls proxy
 alembic upgrade head    # Apply all migrations
 alembic downgrade -1    # Roll back one step
 ```
+
+> **Before running in prod:** run `alembic upgrade head` to apply migration 004 (`ai_usage_events` table for per-org Claude cost tracking).
 
 ## Cron Jobs
 

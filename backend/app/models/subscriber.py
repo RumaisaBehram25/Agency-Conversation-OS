@@ -19,7 +19,7 @@ from sqlalchemy import (
     UniqueConstraint,
     Uuid,
 )
-from sqlalchemy.dialects.postgresql import ARRAY
+from sqlalchemy.dialects.postgresql import ARRAY, JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base, BuyerStage, ChannelType, OrgScopedMixin, TimestampMixin
@@ -61,6 +61,7 @@ class Subscriber(Base, TimestampMixin, OrgScopedMixin):
     interests: Mapped[list[str] | None] = mapped_column(ARRAY(Text), nullable=True)
     objections_raised: Mapped[list[str] | None] = mapped_column(ARRAY(Text), nullable=True)
     conversation_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    history: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
 
     # ── Conversion Status ────────────────────────────────────
     is_converted: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)

@@ -139,89 +139,108 @@ async def store_message_and_update_context(
         db: Database session (creates own if None).
         redis_client: Optional Redis client for cache invalidation.
     """
+    conversation_id = uuid.UUID(context.conversation_id) if context.conversation_id else None
+    logger.info(
+        "BACKGROUND MESSAGE WRITER TRIGGERED conversation_id=%s payload.last_input_text=%s",
+        conversation_id,
+        user_message,
+    )
+
+    if not conversation_id:
+        logger.warning("No conversation_id in context, skipping storage")
+        return
+
     try:
         async with async_session_factory() as session:
-            conversation_id = uuid.UUID(context.conversation_id) if context.conversation_id else None
-            if not conversation_id:
-                logger.warning("No conversation_id in context, skipping storage")
-                return
-
+            logger.info("MESSAGE INSERT START conversation_id=%s", conversation_id)
             now = datetime.now(timezone.utc)
 
-            # ── Store user message ─────────────────────────────
+            result = await session.execute(
+                select(Conversation).where(
+                    Conversation.id == conversation_id,
+                    Conversation.org_id == uuid.UUID(context.org_id),
+                )
+            )
+            conversation = result.scalar_one_or_none()
+            if conversation is None:
+                logger.warning(
+                    "Conversation not found for background writer conversation_id=%s org_id=%s",
+                    conversation_id,
+                    context.org_id,
+                )
+                return
+
+            subscriber_result = await session.execute(
+                select(Subscriber).where(
+                    Subscriber.org_id == uuid.UUID(context.org_id),
+                    Subscriber.manychat_subscriber_id == context.subscriber.subscriber_id,
+                )
+            )
+            subscriber = subscriber_result.scalar_one_or_none()
+            if subscriber is None:
+                logger.warning(
+                    "Subscriber not found for background writer conversation_id=%s manychat_subscriber_id=%s",
+                    conversation_id,
+                    context.subscriber.subscriber_id,
+                )
+                return
+
             user_msg = Message(
-                conversation_id=conversation_id,
+                conversation_id=conversation.id,
                 sender=MessageSender.USER,
                 content=user_message,
             )
-            session.add(user_msg)
-
-            # ── Store AI message ───────────────────────────────
             ai_msg = Message(
-                conversation_id=conversation_id,
+                conversation_id=conversation.id,
                 sender=MessageSender.AI,
                 content=ai_response.response_text,
                 intent_signals=ai_response.intent_signals or None,
-                buyer_stage_at_time=BuyerStage(ai_response.buyer_stage) if ai_response.buyer_stage in [s.value for s in BuyerStage] else None,
+                buyer_stage_at_time=(
+                    BuyerStage(ai_response.buyer_stage)
+                    if ai_response.buyer_stage in [stage.value for stage in BuyerStage]
+                    else None
+                ),
                 compliance_flags=ai_response.compliance_flags or None,
                 ai_model=ai_response.model_used,
                 ai_response_time_ms=ai_response.response_time_ms,
                 ai_tokens_used=ai_response.tokens_used,
                 quick_replies=ai_response.suggested_quick_replies or None,
             )
-            session.add(ai_msg)
+            session.add_all([user_msg, ai_msg])
 
-            # ── Update conversation ────────────────────────────
-            await session.execute(
-                update(Conversation)
-                .where(Conversation.id == conversation_id)
-                .values(
-                    message_count=Conversation.message_count + 2,
-                    last_activity_at=now,
-                    ai_response_time_avg_ms=ai_response.response_time_ms,
-                )
-            )
+            conversation.message_count = (conversation.message_count or 0) + 2
+            conversation.last_activity_at = now
+            conversation.last_message_preview = ai_response.response_text[:250]
+            if ai_response.response_time_ms is not None:
+                conversation.ai_response_time_avg_ms = ai_response.response_time_ms
 
-            # ── Update subscriber ──────────────────────────────
-            sub_updates: dict = {
-                "last_message_at": now,
-                "total_messages": Subscriber.total_messages + 2,
-            }
+            subscriber.last_message_at = now
+            subscriber.total_messages = (subscriber.total_messages or 0) + 2
 
-            # Update buyer stage if changed
-            if ai_response.buyer_stage and ai_response.buyer_stage in [s.value for s in BuyerStage]:
-                sub_updates["buyer_stage"] = BuyerStage(ai_response.buyer_stage)
+            if ai_response.buyer_stage in [stage.value for stage in BuyerStage]:
+                subscriber.buyer_stage = BuyerStage(ai_response.buyer_stage)
 
-            # Append new intent signals to interests
-            if ai_response.intent_signals:
-                # We can't easily append to ARRAY in SQLAlchemy, so we'll
-                # handle this separately if needed
-                pass
-
-            # Find subscriber by manychat ID
-            sub_result = await session.execute(
-                select(Subscriber).where(
-                    Subscriber.org_id == uuid.UUID(context.org_id),
-                    Subscriber.manychat_subscriber_id == context.subscriber.subscriber_id,
-                )
-            )
-            subscriber = sub_result.scalar_one_or_none()
-            if subscriber:
-                for key, value in sub_updates.items():
-                    setattr(subscriber, key, value)
-
+            await session.flush()
             await session.commit()
+            logger.info(
+                "MESSAGE COMMITTED SUCCESSFULLY conversation_id=%s user_message_length=%s ai_message_length=%s",
+                conversation_id,
+                len(user_message),
+                len(ai_response.response_text),
+            )
 
-            # ── Invalidate context cache ───────────────────────
-            if redis_client and conversation_id:
+            if redis_client:
                 cache_key = f"{_CONTEXT_CACHE_PREFIX}{conversation_id}"
                 try:
                     await redis_client.delete(cache_key)
                 except Exception:
-                    pass
+                    logger.debug(
+                        "Failed to invalidate context cache for conversation_id=%s",
+                        conversation_id,
+                        exc_info=True,
+                    )
 
-            # ── Trigger summarization every N turns ────────────
-            new_count = context.message_count + 2
+            new_count = conversation.message_count
             if new_count > 0 and new_count % (_SUMMARIZE_EVERY_N_TURNS * 2) == 0:
                 asyncio.create_task(
                     _trigger_summarization(
@@ -232,12 +251,17 @@ async def store_message_and_update_context(
                 )
 
             logger.debug(
-                f"Stored messages for conversation {conversation_id} "
-                f"(total: {new_count})"
+                "Stored messages for conversation %s (total: %s)",
+                conversation_id,
+                new_count,
             )
 
-    except Exception as e:
-        logger.error(f"Failed to store message/update context: {e}", exc_info=True)
+    except Exception:
+        logger.exception(
+            "Failed to store messages/update context conversation_id=%s org_id=%s",
+            conversation_id,
+            context.org_id,
+        )
 
 
 async def _get_or_create_subscriber(

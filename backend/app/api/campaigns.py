@@ -16,6 +16,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user, get_org_id
+from app.config import settings
 from app.database import get_db
 from app.models.campaign_metrics import CampaignBreakdown, CampaignMetric
 from app.models.user import User
@@ -25,6 +26,13 @@ from app.schemas.campaigns import (
     BreakdownItem,
     CampaignDailyMetric,
     CampaignSummary,
+)
+from app.services.olap_service import (
+    get_olap_campaign_breakdowns,
+    get_olap_campaign_detail,
+    list_olap_adsets,
+    list_olap_ads,
+    list_olap_campaigns,
 )
 
 router = APIRouter()
@@ -70,6 +78,9 @@ async def list_campaigns(
     averaged cpc/cpm/ctr, and the latest status and name.
     Sorted by total spend descending.
     """
+    if settings.reporting_api_use_olap:
+        return await list_olap_campaigns(org_id, date_from, date_to)
+
     query = (
         select(
             CampaignMetric.meta_campaign_id,
@@ -133,6 +144,9 @@ async def get_campaign_detail(
     Returns one row per day for the given campaign within the date range,
     ordered by date ascending.
     """
+    if settings.reporting_api_use_olap:
+        return await get_olap_campaign_detail(org_id, campaign_id, date_from, date_to)
+
     query = (
         select(
             CampaignMetric.date,
@@ -192,6 +206,9 @@ async def list_adsets(
     Groups adset-level rows by meta_adset_id and returns
     aggregated metrics sorted by spend descending.
     """
+    if settings.reporting_api_use_olap:
+        return await list_olap_adsets(org_id, campaign_id, date_from, date_to)
+
     query = (
         select(
             CampaignMetric.meta_adset_id,
@@ -260,6 +277,9 @@ async def list_ads(
     Groups ad-level rows by meta_ad_id and returns
     aggregated metrics sorted by spend descending.
     """
+    if settings.reporting_api_use_olap:
+        return await list_olap_ads(org_id, campaign_id, adset_id, date_from, date_to)
+
     query = (
         select(
             CampaignMetric.meta_ad_id,
@@ -326,6 +346,9 @@ async def get_campaign_breakdowns(
     Groups by breakdown_key and returns aggregated
     spend/impressions/clicks/leads sorted by spend descending.
     """
+    if settings.reporting_api_use_olap:
+        return await get_olap_campaign_breakdowns(org_id, campaign_id, type, date_from, date_to)
+
     if type not in ("age_gender", "platform"):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,

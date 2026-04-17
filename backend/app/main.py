@@ -17,6 +17,7 @@ from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.config import settings
+from app.olap import get_object_storage_adapter, get_query_adapter
 from app.redis import close_redis, init_redis
 from app.api import api_router
 from app.middleware.rate_limit import RateLimitMiddleware
@@ -37,6 +38,14 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """Application startup and shutdown lifecycle."""
     # Startup
     logger.info(f"Starting {settings.app_name} ({settings.app_env})")
+    storage_adapter = get_object_storage_adapter()
+    query_adapter = get_query_adapter()
+    logger.info(
+        "OLAP providers: storage=%s query=%s root=%s",
+        storage_adapter.provider,
+        query_adapter.provider,
+        settings.olap_s3_uri,
+    )
 
     # Initialize Redis
     try:

@@ -9,10 +9,12 @@ import uuid
 from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import settings
 from app.database import get_db
 from app.models.user import User
 from app.schemas.dashboard import DashboardOverviewResponse
 from app.services.analytics_service import get_dashboard_overview
+from app.services.olap_service import get_olap_dashboard_overview
 from app.api.deps import get_current_user, get_org_id
 
 router = APIRouter()
@@ -34,5 +36,8 @@ async def dashboard_overview(
     - Today's conversions and revenue
     - Campaign health array (green/yellow/red per channel)
     """
-    data = await get_dashboard_overview(db, org_id)
+    if settings.reporting_api_use_olap:
+        data = await get_olap_dashboard_overview(org_id)
+    else:
+        data = await get_dashboard_overview(db, org_id)
     return DashboardOverviewResponse(**data)

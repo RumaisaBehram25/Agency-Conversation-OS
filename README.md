@@ -67,6 +67,52 @@ docker-compose up --build
 
 This starts all four services. Postgres and Redis include health checks — the API waits for both to be healthy before starting.
 
+### Optional: start the self-hosted OLAP profile
+
+Phase 1 keeps the existing UI and API behavior unchanged, but the backend can now be configured with an OLAP object store for parallel exports and parity checks.
+
+```bash
+docker-compose --profile olap-selfhosted up --build
+```
+
+With the self-hosted profile enabled, MinIO is exposed at `http://localhost:9002` and the S3-compatible API is exposed at `http://localhost:9001`.
+
+Set these env values in `.env` when using the self-hosted profile:
+
+```bash
+OLAP_STORAGE_PROVIDER=s3
+OLAP_QUERY_PROVIDER=trino
+REPORTING_API_SOURCE=olap
+OLAP_BUCKET=attora-analytics
+OLAP_PREFIX=lake
+OLAP_ENDPOINT=http://minio:9000
+OLAP_ACCESS_KEY_ID=minioadmin
+OLAP_SECRET_ACCESS_KEY=minioadmin
+OLAP_S3_FORCE_PATH_STYLE=true
+OLAP_SECURE=false
+OLAP_SCHEDULER_ENABLED=true
+TRINO_HOST=trino
+TRINO_PORT=8080
+TRINO_HOST_PORT=8083
+TRINO_USER=attora
+TRINO_CATALOG=lakehouse
+TRINO_SCHEMA=default
+```
+
+Later, the same backend code can be pointed at AWS by changing the same env contract to S3 and Athena values.
+
+The self-hosted profile now includes a scheduler container that runs phase 1 OLAP maintenance jobs from env-configured cron expressions. By default it exports `daily_analytics` and `ai_usage_events`, shadow-archives old messages in 7-day windows, and runs both low-level dataset parity and reporting parity checks by org/date range.
+
+The same profile now also starts a Hive metastore and Trino. Existing `/api/*` routes remain PostgreSQL-backed, while additive Trino-backed mirrors are available under `/api/olap/*` with the same response formats for dashboard, analytics, ROI, AI performance, exports, and campaign drill-downs.
+
+If you want the existing frontend-facing reporting paths to use OLAP without changing the frontend, set `REPORTING_API_SOURCE=olap`. With that flag enabled, `/api/dashboard`, `/api/analytics*`, and `/api/campaigns*` keep the same contracts but read from the OLAP service layer. `/api/olap/*` remains available in both modes.
+
+There is also a manual trigger endpoint for OLAP maintenance jobs at `POST /api/olap/jobs/trigger`. Supported jobs are `export_daily_analytics`, `export_ai_usage`, `archive_messages`, `check_olap_parity`, and `check_reporting_parity`.
+
+Trino is published on `http://localhost:8083` by default to avoid collisions with other local services. The application still connects to Trino internally with `TRINO_HOST=trino` and `TRINO_PORT=8080`.
+
+Checkpoint metadata is stored in object storage under the configured checkpoint prefix, so scheduled exports and archives process delta windows instead of rescanning full historical partitions on every run.
+
 ### 3. Run the database migration
 
 ```bash

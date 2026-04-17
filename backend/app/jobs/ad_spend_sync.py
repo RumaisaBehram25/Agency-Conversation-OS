@@ -25,6 +25,7 @@ from app.integrations.meta.marketing_api import (
     fetch_campaign_metadata,
     fetch_daily_ad_spend,
 )
+from app.jobs.olap_exports import export_campaign_facts_to_olap
 from app.models.analytics import DailyAnalytics
 from app.models.campaign_metrics import CampaignBreakdown, CampaignMetric
 from app.models.organization import Organization
@@ -74,6 +75,8 @@ async def sync_ad_spend(
     total_adsets_synced = 0
     total_ads_synced = 0
     total_breakdowns_synced = 0
+    total_olap_objects_written = 0
+    total_olap_rows_written = 0
     errors = []
 
     for org in orgs:
@@ -216,6 +219,23 @@ async def sync_ad_spend(
         )
         await _apply_campaign_metadata(db, org.id, metadata)
 
+        try:
+            await db.flush()
+            olap_summary = await export_campaign_facts_to_olap(
+                db,
+                org.id,
+                date_from,
+                date_to,
+            )
+            total_olap_objects_written += olap_summary.get("objects_written", 0)
+            total_olap_rows_written += (
+                olap_summary.get("campaign_metrics_rows", 0)
+                + olap_summary.get("campaign_breakdowns_rows", 0)
+            )
+        except Exception as e:
+            logger.warning("OLAP export failed for org %s: %s", org.id, e)
+            errors.append(f"org {org.id}: olap export failed")
+
         logger.info(
             f"Granular sync: org {org.id} ({org.name}) — "
             f"{len(campaign_data)} campaigns, {len(adset_data)} adsets, "
@@ -233,6 +253,8 @@ async def sync_ad_spend(
         "adsets_synced": total_adsets_synced,
         "ads_synced": total_ads_synced,
         "breakdowns_synced": total_breakdowns_synced,
+        "olap_rows_written": total_olap_rows_written,
+        "olap_objects_written": total_olap_objects_written,
         "errors": errors if errors else None,
         "message": f"Synced {total_dates_updated} date(s) across {len(orgs)} org(s)",
     }

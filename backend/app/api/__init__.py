@@ -13,6 +13,7 @@ from app.api.dashboard import router as dashboard_router
 from app.api.settings import router as settings_router
 from app.api.campaigns import router as campaigns_router
 from app.api.cron import router as cron_router
+from app.api.olap import router as olap_router
 
 api_router = APIRouter()
 
@@ -29,3 +30,4 @@ api_router.include_router(dashboard_router, prefix="/dashboard", tags=["dashboar
 api_router.include_router(settings_router, prefix="/settings", tags=["settings"])
 api_router.include_router(campaigns_router, prefix="/campaigns", tags=["campaigns"])
 api_router.include_router(cron_router, prefix="/cron", tags=["cron"])
+api_router.include_router(olap_router, prefix="/olap", tags=["olap"])

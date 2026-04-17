@@ -3,11 +3,16 @@ Attora — Cron Job API Routes
 
 POST /api/cron/stale-conversations  — Mark stale conversations
 POST /api/cron/daily-digest         — Aggregate daily analytics
+POST /api/cron/ad-spend-sync        — Sync ad spend and dual-write campaign facts
+POST /api/cron/export-ai-usage      — Export AI usage events to OLAP
+POST /api/cron/archive-messages     — Shadow-archive old messages to OLAP
+POST /api/cron/check-olap-parity    — Compare PostgreSQL facts vs exported Parquet
 
 Protected by CRON_SECRET header — not accessible to regular users.
 """
 
 from datetime import date
+import uuid
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -16,6 +21,15 @@ from app.config import settings
 from app.database import get_db
 from app.jobs.ad_spend_sync import sync_ad_spend
 from app.jobs.daily_digest import aggregate_daily_analytics
+from app.jobs.olap_exports import (
+    archive_messages_to_olap,
+    archive_messages_delta_to_olap,
+    export_ai_usage_events_to_olap,
+    export_ai_usage_events_delta_to_olap,
+    export_daily_analytics_delta_to_olap,
+    run_olap_parity_check,
+    run_reporting_parity_check,
+)
 from app.jobs.stale_conversations import mark_stale_conversations
 
 router = APIRouter()
@@ -76,3 +90,94 @@ async def cron_ad_spend_sync(
     meta_ad_account_id. Protected by CRON_SECRET header.
     """
     return await sync_ad_spend(db, days_back=days_back, granular=granular)
+
+
+@router.post("/export-ai-usage")
+async def cron_export_ai_usage(
+    _: None = Depends(verify_cron_secret),
+    db: AsyncSession = Depends(get_db),
+    target_date: date | None = Query(None, description="Date to export (defaults to yesterday)"),
+    org_id: uuid.UUID | None = Query(None, description="Optional org filter"),
+    use_checkpoint: bool = Query(False, description="Use checkpoint metadata for delta export"),
+) -> dict:
+    """Export AI usage events to OLAP object storage."""
+    if use_checkpoint:
+        return await export_ai_usage_events_delta_to_olap(db, org_id=org_id)
+    return await export_ai_usage_events_to_olap(db, target_date=target_date, org_id=org_id)
+
+
+@router.post("/export-daily-analytics")
+async def cron_export_daily_analytics(
+    _: None = Depends(verify_cron_secret),
+    db: AsyncSession = Depends(get_db),
+    org_id: uuid.UUID | None = Query(None, description="Optional org filter"),
+) -> dict:
+    """Export daily_analytics rows to OLAP using checkpoint metadata."""
+    return await export_daily_analytics_delta_to_olap(db, org_id=org_id)
+
+
+@router.post("/archive-messages")
+async def cron_archive_messages(
+    _: None = Depends(verify_cron_secret),
+    db: AsyncSession = Depends(get_db),
+    older_than_days: int = Query(settings.olap_message_hot_retention_days, ge=1),
+    limit: int = Query(settings.olap_export_batch_size, ge=1),
+    org_id: uuid.UUID | None = Query(None, description="Optional org filter"),
+    use_checkpoint: bool = Query(False, description="Use checkpoint metadata for delta archiving"),
+) -> dict:
+    """Shadow-archive older messages to OLAP without deleting PostgreSQL rows."""
+    if use_checkpoint:
+        return await archive_messages_delta_to_olap(
+            db,
+            older_than_days=older_than_days,
+            org_id=org_id,
+        )
+    return await archive_messages_to_olap(
+        db,
+        older_than_days=older_than_days,
+        limit=limit,
+        org_id=org_id,
+    )
+
+
+@router.post("/check-olap-parity")
+async def cron_check_olap_parity(
+    _: None = Depends(verify_cron_secret),
+    db: AsyncSession = Depends(get_db),
+    datasets: str = Query(
+        "campaign_metrics,campaign_breakdowns,ai_usage_events",
+        description="Comma-separated dataset names to compare",
+    ),
+    date_from: date | None = Query(None),
+    date_to: date | None = Query(None),
+    org_id: uuid.UUID | None = Query(None, description="Optional org filter"),
+    older_than_days: int | None = Query(None, ge=1),
+) -> dict:
+    """Compare PostgreSQL datasets against exported Parquet partitions."""
+    dataset_names = [value.strip() for value in datasets.split(",") if value.strip()]
+    return await run_olap_parity_check(
+        db,
+        datasets=dataset_names,
+        date_from=date_from,
+        date_to=date_to,
+        org_id=org_id,
+        older_than_days=older_than_days,
+    )
+
+
+@router.post("/check-reporting-parity")
+async def cron_check_reporting_parity(
+    _: None = Depends(verify_cron_secret),
+    db: AsyncSession = Depends(get_db),
+    date_from: date | None = Query(None),
+    date_to: date | None = Query(None),
+    org_ids: str | None = Query(None, description="Comma-separated org UUIDs"),
+) -> dict:
+    """Compare reporting-facing PostgreSQL aggregates to OLAP exports by org/date range."""
+    parsed_org_ids = [uuid.UUID(value.strip()) for value in org_ids.split(",")] if org_ids else None
+    return await run_reporting_parity_check(
+        db,
+        org_ids=parsed_org_ids,
+        date_from=date_from,
+        date_to=date_to,
+    )

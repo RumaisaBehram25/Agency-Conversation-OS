@@ -119,15 +119,17 @@ async def list_conversations(
     # Build response items with last message preview
     items = []
     for conv in conversations:
-        # Fetch last message preview
-        last_msg_result = await db.execute(
-            select(Message.content)
-            .where(Message.conversation_id == conv.id)
-            .order_by(Message.created_at.desc())
-            .limit(1)
-        )
-        last_message = last_msg_result.scalar_one_or_none()
-        last_message_preview = last_message[:100] if last_message else None
+        # Prefer the persisted preview, but fall back to the latest message.
+        last_message_preview = conv.last_message_preview
+        if last_message_preview is None:
+            last_msg_result = await db.execute(
+                select(Message.content)
+                .where(Message.conversation_id == conv.id)
+                .order_by(Message.created_at.desc())
+                .limit(1)
+            )
+            last_message = last_msg_result.scalar_one_or_none()
+            last_message_preview = last_message[:100] if last_message else None
 
         subscriber = conv.subscriber
         subscriber_name = None

@@ -24,6 +24,7 @@ from app.config import settings
 from app.database import async_session_factory
 from app.models.ai_usage_event import AIUsageEvent
 from app.models.base import BuyerStage, ChannelType, ConversationStatus, MessageSender
+from app.models.campaign_metrics import CampaignMetric
 from app.models.conversation import Conversation
 from app.models.message import Message
 from app.models.subscriber import Subscriber
@@ -327,6 +328,11 @@ async def _get_or_create_subscriber(
             subscriber.ad_set_id = custom_fields["ad_set_id"]
         if custom_fields.get("campaign_id") and not subscriber.campaign_id:
             subscriber.campaign_id = custom_fields["campaign_id"]
+        # Resolve post_id from cached ad creatives if still missing
+        if not subscriber.post_id and subscriber.ad_id:
+            cached = await _lookup_post_id_from_ad_id(db, org_id, subscriber.ad_id)
+            if cached:
+                subscriber.post_id = cached
         return subscriber
 
     # Parse channel
@@ -334,6 +340,11 @@ async def _get_or_create_subscriber(
         channel_enum = ChannelType(channel.lower())
     except ValueError:
         channel_enum = ChannelType.MESSENGER
+
+    ad_id = custom_fields.get("ad_id")
+    post_id = custom_fields.get("post_id")
+    if not post_id and ad_id:
+        post_id = await _lookup_post_id_from_ad_id(db, org_id, ad_id)
 
     subscriber = Subscriber(
         org_id=org_id,
@@ -346,14 +357,33 @@ async def _get_or_create_subscriber(
         buyer_stage=BuyerStage.AWARENESS,
         first_message_at=datetime.now(timezone.utc),
         ctwa_clid=custom_fields.get("ctwa_clid"),
-        ad_id=custom_fields.get("ad_id"),
-        post_id=custom_fields.get("post_id"),
+        ad_id=ad_id,
+        post_id=post_id,
         ad_set_id=custom_fields.get("ad_set_id"),
         campaign_id=custom_fields.get("campaign_id"),
     )
     db.add(subscriber)
     await db.flush()  # Get the ID assigned
     return subscriber
+
+
+async def _lookup_post_id_from_ad_id(
+    db: AsyncSession,
+    org_id: uuid.UUID,
+    ad_id: str,
+) -> str | None:
+    """Return the cached post_id for an ad_id, or None if not yet synced."""
+    result = await db.execute(
+        select(CampaignMetric.post_id)
+        .where(
+            CampaignMetric.org_id == org_id,
+            CampaignMetric.meta_ad_id == ad_id,
+            CampaignMetric.level == "ad",
+            CampaignMetric.post_id.isnot(None),
+        )
+        .limit(1)
+    )
+    return result.scalar_one_or_none()
 
 
 async def _get_or_create_conversation(

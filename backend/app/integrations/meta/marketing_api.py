@@ -621,6 +621,97 @@ async def fetch_breakdown_insights(
 
 
 # ---------------------------------------------------------------------------
+# Ad creative lookup (ad_id -> post_id mapping)
+# ---------------------------------------------------------------------------
+
+async def fetch_ad_creatives(
+    ad_account_id: str,
+    access_token: str,
+) -> list[dict[str, Any]]:
+    """
+    Fetch ad_id -> post_id mappings from Meta.
+
+    Hits /act_{id}/ads?fields=id,creative{effective_object_story_id,object_story_id}
+    and returns [{"ad_id": "...", "post_id": "<page_id>_<post_id>"}, ...].
+
+    Prefers effective_object_story_id (populated even for dark/unpublished
+    posts used by CTWA / click-to-Messenger ads); falls back to
+    object_story_id. Skips rows with neither.
+    """
+    ad_account_id = _ensure_act_prefix(ad_account_id)
+
+    url: str | None = f"{_GRAPH_API_BASE}/{ad_account_id}/ads"
+    params: dict[str, str] = {
+        "access_token": access_token,
+        "fields": "id,creative{effective_object_story_id,object_story_id}",
+        "limit": "500",
+    }
+
+    results: list[dict[str, Any]] = []
+
+    try:
+        async with httpx.AsyncClient(timeout=_DEFAULT_TIMEOUT) as client:
+            while url:
+                response = await client.get(url, params=params)
+                response.raise_for_status()
+                body = response.json()
+
+                for row in body.get("data", []):
+                    ad_id = row.get("id")
+                    creative = row.get("creative") or {}
+                    post_id = (
+                        creative.get("effective_object_story_id")
+                        or creative.get("object_story_id")
+                    )
+                    if ad_id and post_id:
+                        results.append({"ad_id": ad_id, "post_id": post_id})
+
+                paging = body.get("paging", {})
+                next_url = paging.get("next")
+                if next_url:
+                    url = next_url
+                    params = {}
+                else:
+                    url = None
+
+        logger.info(
+            f"Marketing API: fetched {len(results)} ad creative mappings "
+            f"for {ad_account_id}"
+        )
+        return results
+
+    except httpx.HTTPStatusError as e:
+        status_code = e.response.status_code
+        error_body = e.response.text[:500]
+
+        if status_code in (401, 403):
+            logger.error(
+                f"Marketing API auth error for {ad_account_id}: "
+                f"{status_code} — token may be invalid or missing ads_read permission. "
+                f"Response: {error_body}"
+            )
+        elif status_code == 429:
+            logger.warning(
+                f"Marketing API rate limited for {ad_account_id}. "
+                f"Response: {error_body}"
+            )
+        else:
+            logger.error(
+                f"Marketing API HTTP error for {ad_account_id}: "
+                f"{status_code}: {error_body}"
+            )
+        return results
+
+    except httpx.TimeoutException:
+        logger.error(f"Marketing API timeout for {ad_account_id}")
+        return results
+
+    except Exception as e:
+        logger.error(f"Marketing API request failed for {ad_account_id}: {e}")
+        return results
+
+
+# ---------------------------------------------------------------------------
 # Campaign metadata (not insights — structural info)
 # ---------------------------------------------------------------------------
 

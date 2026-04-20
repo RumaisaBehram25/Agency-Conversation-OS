@@ -40,6 +40,10 @@ class CampaignMetric(Base, TimestampMixin, OrgScopedMixin):
     meta_ad_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     meta_ad_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
+    # Cached {page_id}_{post_id} from AdCreative.effective_object_story_id.
+    # Populated only on level='ad' rows by the sync_ad_spend job.
+    post_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+
     # ── Campaign Config ──────────────────────────────────────
     status: Mapped[str | None] = mapped_column(String(50), nullable=True)  # ACTIVE, PAUSED, etc.
     objective: Mapped[str | None] = mapped_column(String(100), nullable=True)

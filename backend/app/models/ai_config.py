@@ -33,7 +33,7 @@ class AIConfig(Base, TimestampMixin, OrgScopedMixin):
     system_prompt_override: Mapped[str | None] = mapped_column(Text, nullable=True)
     product_knowledge: Mapped[str | None] = mapped_column(Text, nullable=True)
     compliance_rules: Mapped[str | None] = mapped_column(Text, nullable=True)
-    conversion_playbook: Mapped[str | None] = mapped_column(Text, nullable=True)
+    conversion_playbook: Mapped[list | None] = mapped_column(JSONB, nullable=True)
     objection_handlers: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     greeting_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     fallback_message: Mapped[str | None] = mapped_column(Text, nullable=True)

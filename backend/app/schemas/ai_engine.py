@@ -91,6 +91,7 @@ class SubscriberContext(BaseModel):
     channel: str = "messenger"
     ctwa_clid: str | None = None
     ad_id: str | None = None
+    post_id: str | None = None
 
 
 class ConversationContext(BaseModel):
@@ -131,7 +132,7 @@ class AIConfigData(BaseModel):
     system_prompt_override: str | None = None
     product_knowledge: str | None = None
     compliance_rules: str | None = None
-    conversion_playbook: str | None = None
+    conversion_playbook: list | None = None
     objection_handlers: dict | None = None
     greeting_message: str | None = None
     fallback_message: str | None = None

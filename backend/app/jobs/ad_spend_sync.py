@@ -14,10 +14,11 @@ import logging
 import uuid
 from datetime import date, timedelta
 
-from sqlalchemy import and_, select
+from sqlalchemy import and_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.integrations.meta.marketing_api import (
+    fetch_ad_creatives,
     fetch_ad_insights,
     fetch_adset_insights,
     fetch_breakdown_insights,
@@ -29,6 +30,7 @@ from app.jobs.olap_exports import export_campaign_facts_to_olap
 from app.models.analytics import DailyAnalytics
 from app.models.campaign_metrics import CampaignBreakdown, CampaignMetric
 from app.models.organization import Organization
+from app.models.subscriber import Subscriber
 from app.security.encryption import decrypt_value
 
 logger = logging.getLogger("attora.jobs.ad_spend_sync")
@@ -77,6 +79,8 @@ async def sync_ad_spend(
     total_breakdowns_synced = 0
     total_olap_objects_written = 0
     total_olap_rows_written = 0
+    total_creatives_synced = 0
+    total_subscribers_backfilled = 0
     errors = []
 
     for org in orgs:
@@ -235,11 +239,22 @@ async def sync_ad_spend(
         except Exception as e:
             logger.warning("OLAP export failed for org %s: %s", org.id, e)
             errors.append(f"org {org.id}: olap export failed")
+        # Ad creatives (ad_id -> post_id mapping) + subscriber backfill
+        creatives = await fetch_ad_creatives(
+            ad_account_id=org.meta_ad_account_id,
+            access_token=access_token,
+        )
+        creatives_synced = await _apply_ad_creatives(db, org.id, creatives)
+        total_creatives_synced += creatives_synced
+
+        backfilled = await _backfill_subscriber_post_ids(db, org.id)
+        total_subscribers_backfilled += backfilled
 
         logger.info(
             f"Granular sync: org {org.id} ({org.name}) — "
             f"{len(campaign_data)} campaigns, {len(adset_data)} adsets, "
-            f"{len(ad_data)} ads, breakdowns synced"
+            f"{len(ad_data)} ads, {creatives_synced} creatives, "
+            f"{backfilled} subscribers backfilled, breakdowns synced"
         )
 
     await db.commit()
@@ -255,6 +270,8 @@ async def sync_ad_spend(
         "breakdowns_synced": total_breakdowns_synced,
         "olap_rows_written": total_olap_rows_written,
         "olap_objects_written": total_olap_objects_written,
+        "creatives_synced": total_creatives_synced,
+        "subscribers_backfilled": total_subscribers_backfilled,
         "errors": errors if errors else None,
         "message": f"Synced {total_dates_updated} date(s) across {len(orgs)} org(s)",
     }
@@ -411,6 +428,70 @@ async def _upsert_campaign_breakdown(
         db.add(new_row)
 
     return 1
+
+
+async def _apply_ad_creatives(
+    db: AsyncSession,
+    org_id: uuid.UUID,
+    creatives: list[dict],
+) -> int:
+    """
+    Populate CampaignMetric.post_id on all level='ad' rows for each
+    (org_id, meta_ad_id) in the fetched creatives.
+
+    The same post_id repeats across every daily row for the same ad —
+    accepted denormalization (post_id is ad-identity, not a daily metric).
+
+    Returns the count of {ad_id, post_id} mappings successfully applied.
+    """
+    applied = 0
+    for entry in creatives:
+        ad_id = entry.get("ad_id")
+        post_id = entry.get("post_id")
+        if not ad_id or not post_id:
+            continue
+
+        stmt = (
+            update(CampaignMetric)
+            .where(
+                CampaignMetric.org_id == org_id,
+                CampaignMetric.level == "ad",
+                CampaignMetric.meta_ad_id == ad_id,
+            )
+            .values(post_id=post_id)
+            .execution_options(synchronize_session=False)
+        )
+        await db.execute(stmt)
+        applied += 1
+
+    return applied
+
+
+async def _backfill_subscriber_post_ids(
+    db: AsyncSession,
+    org_id: uuid.UUID,
+) -> int:
+    """
+    Fill Subscriber.post_id from cached CampaignMetric.post_id where null.
+
+    Scoped by org_id on both sides to respect multi-tenant boundaries.
+    """
+    stmt = (
+        update(Subscriber)
+        .where(
+            Subscriber.org_id == org_id,
+            Subscriber.post_id.is_(None),
+            Subscriber.ad_id.isnot(None),
+            CampaignMetric.org_id == org_id,
+            CampaignMetric.level == "ad",
+            CampaignMetric.post_id.isnot(None),
+            CampaignMetric.meta_ad_id == Subscriber.ad_id,
+        )
+        .values(post_id=CampaignMetric.post_id)
+        .execution_options(synchronize_session=False)
+    )
+    result = await db.execute(stmt)
+    return result.rowcount or 0
 
 
 async def _apply_campaign_metadata(

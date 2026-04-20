@@ -5,8 +5,10 @@ Shared dependencies for database sessions, authentication, and org scoping.
 """
 
 import uuid
+from typing import Annotated
 
 from fastapi import Depends, Header, HTTPException, status
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from jose import JWTError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -15,9 +17,15 @@ from app.database import get_db
 from app.models.user import OrgUser, User
 from app.security.auth import decode_token
 
+# OpenAPI + Swagger UI: registers HTTP Bearer so "Authorize" sends Authorization correctly.
+_http_bearer = HTTPBearer(auto_error=False)
+
 
 async def get_current_user(
-    authorization: str = Header(..., description="Bearer <access_token>"),
+    credentials: Annotated[
+        HTTPAuthorizationCredentials | None,
+        Depends(_http_bearer),
+    ],
     db: AsyncSession = Depends(get_db),
 ) -> User:
     """
@@ -34,11 +42,10 @@ async def get_current_user(
         headers={"WWW-Authenticate": "Bearer"},
     )
 
-    # Extract token from "Bearer <token>" header
-    if not authorization.startswith("Bearer "):
+    if credentials is None or credentials.scheme.lower() != "bearer":
         raise credentials_exception
 
-    token = authorization[7:]  # Strip "Bearer " prefix
+    token = credentials.credentials
 
     try:
         payload = decode_token(token)

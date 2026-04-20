@@ -23,6 +23,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import settings
 from app.database import async_session_factory
 from app.models.base import BuyerStage, ChannelType, ConversationStatus, MessageSender
+from app.models.campaign import AdCampaign
 from app.models.conversation import Conversation
 from app.models.message import Message
 from app.models.subscriber import Subscriber
@@ -295,6 +296,9 @@ async def _get_or_create_subscriber(
             subscriber.ad_set_id = custom_fields["ad_set_id"]
         if custom_fields.get("campaign_id") and not subscriber.campaign_id:
             subscriber.campaign_id = custom_fields["campaign_id"]
+        # Auto-link to Attora-managed AdCampaign if not already linked
+        if not subscriber.attora_campaign_id:
+            await _link_subscriber_to_campaign(db, org_id, subscriber, custom_fields.get("campaign_id") or subscriber.campaign_id)
         return subscriber
 
     # Parse channel
@@ -317,8 +321,51 @@ async def _get_or_create_subscriber(
         campaign_id=custom_fields.get("campaign_id"),
     )
     db.add(subscriber)
-    await db.flush()  # Get the ID assigned
+    await db.flush()
+    await _link_subscriber_to_campaign(db, org_id, subscriber, custom_fields.get("campaign_id"))
     return subscriber
+
+
+async def _link_subscriber_to_campaign(
+    db: AsyncSession,
+    org_id: uuid.UUID,
+    subscriber: Subscriber,
+    meta_campaign_id: str | None,
+) -> None:
+    """
+    Look up the Attora-managed AdCampaign matching the subscriber's Meta campaign ID
+    and set attora_campaign_id on the subscriber. Logs a compliance warning if
+    the campaign_id is present but not registered as an Attora-managed campaign.
+    """
+    if not meta_campaign_id:
+        return
+
+    result = await db.execute(
+        select(AdCampaign).where(
+            AdCampaign.org_id == org_id,
+            AdCampaign.meta_campaign_id == meta_campaign_id,
+            AdCampaign.is_attora_managed == True,  # noqa: E712
+        )
+    )
+    campaign = result.scalar_one_or_none()
+
+    if campaign:
+        subscriber.attora_campaign_id = campaign.id
+        logger.info(
+            "Linked subscriber %s to Attora campaign '%s' (%s)",
+            subscriber.manychat_subscriber_id,
+            campaign.name,
+            campaign.id,
+        )
+    else:
+        # Compliance: lead came from a campaign Attora doesn't manage
+        logger.warning(
+            "COMPLIANCE: subscriber %s has Meta campaign_id=%s but no matching "
+            "Attora-managed campaign found for org %s — verify this lead should be contacted",
+            subscriber.manychat_subscriber_id,
+            meta_campaign_id,
+            org_id,
+        )
 
 
 async def _get_or_create_conversation(

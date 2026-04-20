@@ -10,6 +10,12 @@ from uuid import UUID
 from pydantic import BaseModel
 
 
+class SubscriberUpdate(BaseModel):
+    attora_campaign_id: UUID | None = None
+    is_converted: bool | None = None
+    conversion_value: float | None = None
+
+
 class SubscriberConversationSummary(BaseModel):
     """Minimal conversation info embedded in subscriber detail."""
 

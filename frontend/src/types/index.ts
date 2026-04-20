@@ -243,6 +243,68 @@ export interface DashboardResponse {
   campaign_health: CampaignHealth[];
 }
 
+// ─── Campaigns & UTMs ────────────────────────────────────────────────────────
+
+export interface CampaignUTM {
+  id: string;
+  campaign_id: string;
+  utm_source: string;
+  utm_medium: string;
+  utm_campaign: string;
+  product_page_url: string | null;
+  checkout_url: string | null;
+  success_url: string | null;
+  product_page_utm_url: string | null;
+  checkout_utm_url: string | null;
+  success_utm_url: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AdCampaign {
+  id: string;
+  org_id: string;
+  name: string;
+  description: string | null;
+  meta_campaign_id: string | null;
+  meta_ad_set_id: string | null;
+  is_attora_managed: boolean;
+  product_id: string | null;
+  is_active: boolean;
+  utm: CampaignUTM | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CampaignCreate {
+  name: string;
+  description?: string;
+  meta_campaign_id?: string;
+  meta_ad_set_id?: string;
+  is_attora_managed?: boolean;
+  product_id?: string;
+  is_active?: boolean;
+}
+
+export interface CampaignUpdate {
+  name?: string;
+  description?: string;
+  meta_campaign_id?: string;
+  meta_ad_set_id?: string;
+  is_attora_managed?: boolean;
+  product_id?: string;
+  is_active?: boolean;
+}
+
+export interface UTMGenerateRequest {
+  product_page_url?: string;
+  checkout_url?: string;
+  success_url?: string;
+  utm_source?: string;
+  utm_medium?: string;
+  utm_campaign?: string;
+}
+
 // ─── Settings ────────────────────────────────────────────────────────────────
 
 export interface SettingsResponse {

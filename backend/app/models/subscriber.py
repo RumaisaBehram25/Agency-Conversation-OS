@@ -12,6 +12,7 @@ from sqlalchemy import (
     Boolean,
     DateTime,
     Enum,
+    ForeignKey,
     Integer,
     Numeric,
     String,
@@ -50,6 +51,13 @@ class Subscriber(Base, TimestampMixin, OrgScopedMixin):
     ad_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     ad_set_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     campaign_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # Attora-specific campaign FK — links subscriber to an AdCampaign record
+    attora_campaign_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid,
+        ForeignKey("ad_campaigns.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
 
     # ── AI Context ───────────────────────────────────────────
     buyer_stage: Mapped[BuyerStage] = mapped_column(
@@ -76,6 +84,7 @@ class Subscriber(Base, TimestampMixin, OrgScopedMixin):
     organization = relationship("Organization", back_populates="subscribers")
     conversations = relationship("Conversation", back_populates="subscriber", cascade="all, delete-orphan")
     conversion_events = relationship("ConversionEvent", back_populates="subscriber", cascade="all, delete-orphan")
+    attora_campaign = relationship("AdCampaign", back_populates="subscribers", foreign_keys=[attora_campaign_id])
 
     __table_args__ = (
         UniqueConstraint("org_id", "manychat_subscriber_id", name="uq_subscribers_org_manychat"),

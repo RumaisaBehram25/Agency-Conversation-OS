@@ -53,6 +53,7 @@ class Organization(Base, TimestampMixin):
     conversations = relationship("Conversation", back_populates="organization", cascade="all, delete-orphan")
     conversion_events = relationship("ConversionEvent", back_populates="organization", cascade="all, delete-orphan")
     daily_analytics = relationship("DailyAnalytics", back_populates="organization", cascade="all, delete-orphan")
+    ad_campaigns = relationship("AdCampaign", back_populates="organization", cascade="all, delete-orphan")
 
     def __repr__(self) -> str:
         return f"<Organization(id={self.id}, name={self.name!r}, slug={self.slug!r})>"

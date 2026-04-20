@@ -16,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.integrations.meta.marketing_api import fetch_daily_ad_spend
 from app.models.analytics import DailyAnalytics
+from app.models.campaign import AdCampaign
 from app.models.organization import Organization
 from app.security.encryption import decrypt_value
 
@@ -66,12 +67,36 @@ async def sync_ad_spend(
             errors.append(f"org {org.id}: decrypt failed")
             continue
 
-        # Fetch spend data from Meta
+        # Only fetch spend for Attora-managed campaigns with registered Meta IDs
+        campaigns_result = await db.execute(
+            select(AdCampaign.meta_campaign_id).where(
+                AdCampaign.org_id == org.id,
+                AdCampaign.is_attora_managed == True,  # noqa: E712
+                AdCampaign.meta_campaign_id.isnot(None),
+                AdCampaign.is_active == True,  # noqa: E712
+            )
+        )
+        managed_campaign_ids = [row for row in campaigns_result.scalars().all()]
+
+        if not managed_campaign_ids:
+            logger.info(
+                f"Ad spend sync: org {org.id} ({org.name}) has no Attora-managed "
+                f"campaigns with Meta campaign IDs — skipping"
+            )
+            continue
+
+        logger.info(
+            f"Ad spend sync: org {org.id} ({org.name}) — "
+            f"syncing {len(managed_campaign_ids)} managed campaign(s): {managed_campaign_ids}"
+        )
+
+        # Fetch spend data filtered to managed campaign IDs only
         spend_data = await fetch_daily_ad_spend(
             ad_account_id=org.meta_ad_account_id,
             access_token=access_token,
             date_from=date_from,
             date_to=date_to,
+            campaign_ids=managed_campaign_ids,
         )
 
         if not spend_data:

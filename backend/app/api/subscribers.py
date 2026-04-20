@@ -21,6 +21,7 @@ from app.schemas.subscriber import (
     SubscriberConversationSummary,
     SubscriberDetail,
     SubscriberListItem,
+    SubscriberUpdate,
 )
 from app.schemas.pagination import PaginatedResponse
 from app.api.deps import get_current_user, get_org_id
@@ -148,6 +149,69 @@ async def get_subscriber(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Subscriber not found",
         )
+
+    conversation_summaries = [
+        SubscriberConversationSummary(
+            id=conv.id,
+            channel=conv.channel.value,
+            status=conv.status.value,
+            message_count=conv.message_count,
+            started_at=conv.started_at,
+            last_activity_at=conv.last_activity_at,
+        )
+        for conv in sorted(subscriber.conversations, key=lambda c: c.created_at, reverse=True)
+    ]
+
+    return SubscriberDetail(
+        id=subscriber.id,
+        manychat_subscriber_id=subscriber.manychat_subscriber_id,
+        channel=subscriber.channel.value,
+        first_name=subscriber.first_name,
+        last_name=subscriber.last_name,
+        phone=subscriber.phone,
+        email=subscriber.email,
+        buyer_stage=subscriber.buyer_stage.value,
+        interests=subscriber.interests,
+        objections_raised=subscriber.objections_raised,
+        conversation_summary=subscriber.conversation_summary,
+        is_converted=subscriber.is_converted,
+        conversion_value=float(subscriber.conversion_value) if subscriber.conversion_value else None,
+        converted_at=subscriber.converted_at,
+        first_message_at=subscriber.first_message_at,
+        last_message_at=subscriber.last_message_at,
+        total_messages=subscriber.total_messages,
+        created_at=subscriber.created_at,
+        updated_at=subscriber.updated_at,
+        conversations=conversation_summaries,
+    )
+
+
+@router.put("/{subscriber_id}", response_model=SubscriberDetail)
+async def update_subscriber(
+    subscriber_id: uuid.UUID,
+    request: SubscriberUpdate,
+    current_user: User = Depends(get_current_user),
+    org_id: uuid.UUID = Depends(get_org_id),
+    db: AsyncSession = Depends(get_db),
+) -> SubscriberDetail:
+    """Update subscriber fields — link to campaign, mark converted, etc."""
+    result = await db.execute(
+        select(Subscriber)
+        .where(Subscriber.id == subscriber_id)
+        .where(Subscriber.org_id == org_id)
+        .options(selectinload(Subscriber.conversations))
+    )
+    subscriber = result.scalar_one_or_none()
+
+    if subscriber is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Subscriber not found")
+
+    update_data = request.model_dump(exclude_unset=True)
+    for field, value in update_data.items():
+        setattr(subscriber, field, value)
+
+    await db.flush()
+    await db.refresh(subscriber)
 
     conversation_summaries = [
         SubscriberConversationSummary(

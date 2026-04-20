@@ -28,6 +28,7 @@ async def fetch_daily_ad_spend(
     access_token: str,
     date_from: date,
     date_to: date,
+    campaign_ids: list[str] | None = None,
 ) -> list[dict[str, Any]]:
     """
     Fetch daily ad spend from Meta Marketing API.
@@ -37,25 +38,39 @@ async def fetch_daily_ad_spend(
         access_token: System user token with ads_read permission.
         date_from: Start date (inclusive).
         date_to: End date (inclusive).
+        campaign_ids: If provided, only fetch spend for these Meta campaign IDs.
+                      If None or empty, no data is fetched (Attora only tracks
+                      registered campaigns).
 
     Returns:
-        List of {"date": "YYYY-MM-DD", "spend": float} dicts.
+        List of {"date": "YYYY-MM-DD", "spend": float} dicts (summed per day).
     """
+    if not campaign_ids:
+        logger.info("fetch_daily_ad_spend: no campaign_ids registered — skipping sync")
+        return []
+
     # Ensure act_ prefix
     if not ad_account_id.startswith("act_"):
         ad_account_id = f"act_{ad_account_id}"
 
     url = f"{_GRAPH_API_BASE}/{ad_account_id}/insights"
+    import json as _json
     params = {
         "access_token": access_token,
-        "fields": "spend",
+        "fields": "spend,campaign_id",
         "time_range": f'{{"since":"{date_from.isoformat()}","until":"{date_to.isoformat()}"}}',
-        "time_increment": "1",  # daily breakdown
-        "level": "account",  # aggregate across all campaigns
+        "time_increment": "1",
+        "level": "campaign",
+        "filtering": _json.dumps([{
+            "field": "campaign.id",
+            "operator": "IN",
+            "value": campaign_ids,
+        }]),
         "limit": "500",
     }
 
-    results: list[dict[str, Any]] = []
+    # Aggregate spend per day across all matching campaigns
+    daily_spend: dict[str, float] = {}
 
     try:
         async with httpx.AsyncClient(timeout=_DEFAULT_TIMEOUT) as client:
@@ -68,23 +83,21 @@ async def fetch_daily_ad_spend(
                     spend = float(row.get("spend", "0"))
                     row_date = row.get("date_start", "")
                     if row_date and spend >= 0:
-                        results.append({
-                            "date": row_date,
-                            "spend": spend,
-                        })
+                        daily_spend[row_date] = daily_spend.get(row_date, 0.0) + spend
 
-                # Handle pagination
                 paging = body.get("paging", {})
                 next_url = paging.get("next")
                 if next_url:
                     url = next_url
-                    params = {}  # next URL includes all params
+                    params = {}
                 else:
                     url = None
 
+        results = [{"date": d, "spend": s} for d, s in sorted(daily_spend.items())]
         logger.info(
             f"Marketing API: fetched {len(results)} days of spend data "
-            f"for {ad_account_id} ({date_from} to {date_to})"
+            f"for {ad_account_id} ({date_from} to {date_to}), "
+            f"campaigns={campaign_ids}"
         )
         return results
 

@@ -11,7 +11,6 @@ from app.api import analytics as analytics_api
 from app.api import auth as auth_api
 from app.api import dashboard as dashboard_api
 from app.api import campaigns as campaigns_api
-from app.config import settings
 from app.database import get_db
 from app.main import app
 from app.models.base import BuyerStage, ChannelType, ConversationStatus, MessageSender, UserRole
@@ -104,9 +103,6 @@ def client():
     async def override_org_id():
         return org_id
 
-    original_reporting_source = settings.reporting_api_source
-    settings.reporting_api_source = "v1"
-
     app.dependency_overrides[api_deps.get_current_user] = override_current_user
     app.dependency_overrides[api_deps.get_org_id] = override_org_id
 
@@ -114,7 +110,6 @@ def client():
         yield test_client, test_user, org_id
 
     app.dependency_overrides.clear()
-    settings.reporting_api_source = original_reporting_source
 
 
 def test_dashboard_contract(client, monkeypatch):
@@ -317,12 +312,10 @@ def test_campaign_contracts(client):
     app.dependency_overrides.pop(get_db, None)
 
 
-def test_root_reporting_endpoints_can_switch_to_olap(client, monkeypatch):
+def test_root_reporting_endpoints_ignore_olap_flag(client, monkeypatch):
     test_client, _, _ = client
 
-    monkeypatch.setattr(settings, "reporting_api_source", "olap")
-
-    async def fake_dashboard(org_id):
+    async def fake_dashboard(db, org_id):
         return {
             "cpqc": 11.0,
             "cpqc_trend": [{"date": date(2026, 4, 1), "value": 11.0}],
@@ -334,7 +327,7 @@ def test_root_reporting_endpoints_can_switch_to_olap(client, monkeypatch):
             "campaign_health": [{"name": "messenger", "status": "green", "reason": "OK"}],
         }
 
-    async def fake_analytics(org_id, date_from, date_to, channel):
+    async def fake_analytics(db, org_id, date_from, date_to, channel):
         return {
             "date_from": date_from,
             "date_to": date_to,
@@ -351,28 +344,24 @@ def test_root_reporting_endpoints_can_switch_to_olap(client, monkeypatch):
             "ccr_trend": [{"date": date(2026, 4, 1), "value": 0.15}],
         }
 
-    async def fake_campaigns(org_id, date_from, date_to):
-        return [{
-            "meta_campaign_id": "cmp_olap",
-            "meta_campaign_name": "OLAP Campaign",
-            "status": "ACTIVE",
-            "spend": 75.0,
-            "impressions": 900,
-            "clicks": 45,
-            "leads": 4,
-            "link_clicks": 20,
-            "video_views": 120,
-            "cpc": 1.67,
-            "cpm": 8.33,
-            "ctr": 0.05,
-        }]
+    def fail_if_called(*args, **kwargs):
+        raise AssertionError("Root APIs must not call OLAP services")
 
-    monkeypatch.setattr(dashboard_api, "get_olap_dashboard_overview", fake_dashboard)
-    monkeypatch.setattr(analytics_api, "get_olap_analytics", fake_analytics)
-    monkeypatch.setattr(campaigns_api, "list_olap_campaigns", fake_campaigns)
+    monkeypatch.setattr(dashboard_api, "get_dashboard_overview", fake_dashboard)
+    monkeypatch.setattr(analytics_api, "get_analytics", fake_analytics)
+    monkeypatch.setattr(dashboard_api, "get_olap_dashboard_overview", fail_if_called, raising=False)
+    monkeypatch.setattr(analytics_api, "get_olap_analytics", fail_if_called, raising=False)
+    monkeypatch.setattr(analytics_api, "get_olap_roi", fail_if_called, raising=False)
+    monkeypatch.setattr(analytics_api, "get_olap_ai_performance", fail_if_called, raising=False)
+    monkeypatch.setattr(analytics_api, "get_olap_analytics_export_data", fail_if_called, raising=False)
+    monkeypatch.setattr(campaigns_api, "list_olap_campaigns", fail_if_called, raising=False)
+    monkeypatch.setattr(campaigns_api, "get_olap_campaign_detail", fail_if_called, raising=False)
+    monkeypatch.setattr(campaigns_api, "list_olap_adsets", fail_if_called, raising=False)
+    monkeypatch.setattr(campaigns_api, "list_olap_ads", fail_if_called, raising=False)
+    monkeypatch.setattr(campaigns_api, "get_olap_campaign_breakdowns", fail_if_called, raising=False)
 
     async def override_db():
-        yield QueueSession()
+        yield QueueSession([FakeResult(all_rows=[])])
 
     app.dependency_overrides[get_db] = override_db
 
@@ -385,66 +374,9 @@ def test_root_reporting_endpoints_can_switch_to_olap(client, monkeypatch):
     assert analytics_response.status_code == 200
     assert analytics_response.json()["total_conversations"] == 20
     assert campaigns_response.status_code == 200
-    assert campaigns_response.json()[0]["meta_campaign_id"] == "cmp_olap"
+    assert campaigns_response.json() == []
 
     app.dependency_overrides.pop(get_db, None)
-    monkeypatch.setattr(settings, "reporting_api_source", "v1")
-
-
-def test_root_analytics_falls_back_to_postgres_when_olap_is_empty(client, monkeypatch):
-    test_client, _, _ = client
-
-    monkeypatch.setattr(settings, "reporting_api_source", "olap")
-
-    async def fake_olap_analytics(org_id, date_from, date_to, channel):
-        return {
-            "date_from": date_from,
-            "date_to": date_to,
-            "channel": channel,
-            "cpqc": None,
-            "ccr": None,
-            "avg_response_time_ms": None,
-            "qualification_rate": None,
-            "total_conversations": 0,
-            "total_conversions": 0,
-            "total_revenue": 0.0,
-            "funnel": [],
-            "cpqc_trend": [],
-            "ccr_trend": [],
-        }
-
-    async def fake_pg_analytics(db, org_id, date_from, date_to, channel):
-        return {
-            "date_from": date_from,
-            "date_to": date_to,
-            "channel": channel,
-            "cpqc": 8.0,
-            "ccr": 0.2,
-            "avg_response_time_ms": 300,
-            "qualification_rate": 0.2,
-            "total_conversations": 25,
-            "total_conversions": 5,
-            "total_revenue": 250.0,
-            "funnel": [{"name": "conversations", "volume": 25, "drop_off_rate": None}],
-            "cpqc_trend": [{"date": date(2026, 4, 1), "value": 8.0}],
-            "ccr_trend": [{"date": date(2026, 4, 1), "value": 0.2}],
-        }
-
-    monkeypatch.setattr(analytics_api, "get_olap_analytics", fake_olap_analytics)
-    monkeypatch.setattr(analytics_api, "get_analytics", fake_pg_analytics)
-
-    async def override_db():
-        yield QueueSession()
-
-    app.dependency_overrides[get_db] = override_db
-
-    response = test_client.get("/api/analytics")
-
-    assert response.status_code == 200
-    assert response.json()["total_conversations"] == 25
-
-    app.dependency_overrides.pop(get_db, None)
-    monkeypatch.setattr(settings, "reporting_api_source", "v1")
 
 
 def test_conversation_contracts(client):

@@ -82,7 +82,6 @@ Set these env values in `.env` when using the self-hosted profile:
 ```bash
 OLAP_STORAGE_PROVIDER=s3
 OLAP_QUERY_PROVIDER=trino
-REPORTING_API_SOURCE=olap
 OLAP_BUCKET=attora-analytics
 OLAP_PREFIX=lake
 OLAP_ENDPOINT=http://minio:9000
@@ -103,9 +102,13 @@ Later, the same backend code can be pointed at AWS by changing the same env cont
 
 The self-hosted profile now includes a scheduler container that runs phase 1 OLAP maintenance jobs from env-configured cron expressions. By default it exports `daily_analytics` and `ai_usage_events`, shadow-archives old messages in 7-day windows, and runs both low-level dataset parity and reporting parity checks by org/date range.
 
-The same profile now also starts a Hive metastore and Trino. Existing `/api/*` routes remain PostgreSQL-backed, while additive Trino-backed mirrors are available under `/api/olap/*` with the same response formats for dashboard, analytics, ROI, AI performance, exports, and campaign drill-downs.
+The same profile now also starts a Hive metastore and Trino. Existing `/api/*` routes remain PostgreSQL-backed and are the stable frontend path. Additive Trino-backed mirrors are available under `/api/olap/*` with the same response formats for dashboard, analytics, ROI, AI performance, exports, and campaign drill-downs.
 
-If you want the existing frontend-facing reporting paths to use OLAP without changing the frontend, set `REPORTING_API_SOURCE=olap`. With that flag enabled, `/api/dashboard`, `/api/analytics*`, and `/api/campaigns*` keep the same contracts but read from the OLAP service layer. `/api/olap/*` remains available in both modes.
+Frontend guidance:
+
+- Use `/api/dashboard`, `/api/analytics*`, and `/api/campaigns*` for the current production UI flow.
+- Use `/api/olap/*` only for experimental or side-by-side OLAP validation flows.
+- There is no longer a root-route toggle for switching `/api/*` to OLAP; OLAP access is isolated under `/api/olap/*`.
 
 There is also a manual trigger endpoint for OLAP maintenance jobs at `POST /api/olap/jobs/trigger`. Supported jobs are `export_daily_analytics`, `export_ai_usage`, `archive_messages`, `check_olap_parity`, and `check_reporting_parity`.
 

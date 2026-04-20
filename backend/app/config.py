@@ -57,7 +57,6 @@ class Settings(BaseSettings):
     # ── OLAP / Data Lake ─────────────────────────────────────
     olap_storage_provider: Literal["none", "s3"] = "none"
     olap_query_provider: Literal["none", "trino", "athena"] = "none"
-    reporting_api_source: Literal["v1", "olap"] = "v1"
     olap_bucket: str = "attora-analytics"
     olap_prefix: str = "lake"
     olap_region: str = "us-east-1"
@@ -109,11 +108,6 @@ class Settings(BaseSettings):
     def olap_query_enabled(self) -> bool:
         """Return whether an OLAP query engine is configured."""
         return self.olap_query_provider != "none"
-
-    @property
-    def reporting_api_use_olap(self) -> bool:
-        """Return whether root reporting endpoints should use OLAP."""
-        return self.reporting_api_source == "olap"
 
     @property
     def olap_root_prefix(self) -> str:

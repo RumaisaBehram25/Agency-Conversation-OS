@@ -1,4 +1,4 @@
-"""Additive OLAP endpoints backed by the configured query engine."""
+"""Additive OLAP endpoints for experimental reporting and side-by-side validation."""
 
 import csv
 import io
@@ -220,6 +220,7 @@ async def olap_dashboard_overview(
     current_user: User = Depends(get_current_user),
     org_id: uuid.UUID = Depends(get_org_id),
 ) -> DashboardOverviewResponse:
+    """Experimental dashboard endpoint for OLAP-backed frontend validation."""
     try:
         return DashboardOverviewResponse(**(await get_olap_dashboard_overview(org_id)))
     except Exception as error:
@@ -235,6 +236,7 @@ async def olap_analytics_overview(
     date_to: date = Query(default_factory=_default_date_to),
     channel: str | None = Query(None),
 ) -> AnalyticsResponse:
+    """Experimental analytics endpoint; keep the main frontend on `/api/analytics` unless validating OLAP."""
     try:
         response = await get_olap_analytics(org_id, date_from, date_to, channel)
         if not _is_empty_analytics_response(response):
@@ -257,6 +259,7 @@ async def olap_analytics_roi(
     date_from: date = Query(default_factory=_default_date_from),
     date_to: date = Query(default_factory=_default_date_to),
 ) -> ROIResponse:
+    """Experimental ROI endpoint for OLAP comparisons against the stable `/api/analytics/roi` path."""
     try:
         response = await get_olap_roi(org_id, date_from, date_to)
         if not _is_empty_roi_response(response):
@@ -279,6 +282,7 @@ async def olap_analytics_ai_performance(
     date_from: date = Query(default_factory=_default_date_from),
     date_to: date = Query(default_factory=_default_date_to),
 ) -> AIPerformanceResponse:
+    """Experimental AI performance endpoint for OLAP-backed validation flows."""
     try:
         response = await get_olap_ai_performance(org_id, date_from, date_to)
         if not _is_empty_ai_response(response):
@@ -302,6 +306,7 @@ async def olap_analytics_export(
     date_to: date = Query(default_factory=_default_date_to),
     channel: str | None = Query(None),
 ) -> StreamingResponse:
+    """Experimental analytics export endpoint for OLAP verification runs."""
     try:
         data = await get_olap_analytics_export_data(org_id, date_from, date_to, channel)
         if not data:
@@ -345,6 +350,7 @@ async def olap_list_campaigns(
     date_from: date = Query(default_factory=_default_date_from),
     date_to: date = Query(default_factory=_default_date_to),
 ) -> list[CampaignSummary]:
+    """Experimental campaign summary endpoint for OLAP-backed drill-down validation."""
     try:
         return await list_olap_campaigns(org_id, date_from, date_to)
     except Exception as error:

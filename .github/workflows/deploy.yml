@@ -1,0 +1,64 @@
+name: Deploy to EC2
+on:
+  push:
+    branches:
+      - local/desktop-updates
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USER }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          timeout: 180s
+          script: |
+            set -e
+            git config --global --add safe.directory /home/ubuntu/attora
+            cd /home/ubuntu/attora
+
+            echo ">>> Pulling latest code..."
+            git fetch origin
+            git checkout local/desktop-updates
+            git pull origin local/desktop-updates
+
+            echo ">>> Writing .env file..."
+            echo "DATABASE_URL=${{ secrets.DATABASE_URL }}" > .env
+            echo "DATABASE_URL_SYNC=${{ secrets.DATABASE_URL_SYNC }}" >> .env
+            echo "POSTGRES_USER=${{ secrets.POSTGRES_USER }}" >> .env
+            echo "POSTGRES_PASSWORD=${{ secrets.POSTGRES_PASSWORD }}" >> .env
+            echo "POSTGRES_DB=${{ secrets.POSTGRES_DB }}" >> .env
+            echo "REDIS_URL=${{ secrets.REDIS_URL }}" >> .env
+            echo "JWT_SECRET_KEY=${{ secrets.JWT_SECRET_KEY }}" >> .env
+            echo "JWT_ALGORITHM=HS256" >> .env
+            echo "ACCESS_TOKEN_EXPIRE_MINUTES=30" >> .env
+            echo "REFRESH_TOKEN_EXPIRE_DAYS=7" >> .env
+            echo "ENCRYPTION_KEY=${{ secrets.ENCRYPTION_KEY }}" >> .env
+            echo "CORS_ORIGINS=${{ secrets.CORS_ORIGINS }}" >> .env
+            echo "RATE_LIMIT_PER_MINUTE=100" >> .env
+            echo "ANTHROPIC_API_KEY=${{ secrets.ANTHROPIC_API_KEY }}" >> .env
+            echo "APP_NAME=Attora" >> .env
+            echo "APP_ENV=production" >> .env
+            echo "DEBUG=false" >> .env
+            echo "LOG_LEVEL=INFO" >> .env
+            echo "MANYCHAT_API_KEY=${{ secrets.MANYCHAT_API_KEY }}" >> .env
+            echo "MANYCHAT_ACCOUNT_ID=${{ secrets.MANYCHAT_ACCOUNT_ID }}" >> .env
+            echo "META_PIXEL_ID=${{ secrets.META_PIXEL_ID }}" >> .env
+            echo "META_CAPI_CREDS=${{ secrets.META_CAPI_CREDS }}" >> .env
+            echo "META_PAGE_ID=" >> .env
+            echo "meta_pixel_id=${{ secrets.META_PIXEL_ID_2 }}" >> .env
+            echo "Token_believethecapicred=${{ secrets.TOKEN_BELIEVE_CAPI_CREDS }}" >> .env
+            echo "CRON_SECRET=${{ secrets.CRON_SECRET }}" >> .env
+            echo "X-Attora-Key=${{ secrets.X_ATTORA_KEY }}" >> .env
+            echo "Request_URL=${{ secrets.REQUEST_URL }}" >> .env
+
+            echo ">>> Restarting Docker..."
+            docker-compose down --remove-orphans
+            docker-compose up -d --build
+            echo ">>> Deploy complete!"
+            docker-compose ps

@@ -30,6 +30,7 @@ from app.security.auth import (
     verify_password,
 )
 from app.api.deps import get_current_user
+from app.models.user import OrgUser
 
 router = APIRouter()
 
@@ -171,6 +172,13 @@ async def refresh_token(
 @router.get("/me", response_model=UserResponse)
 async def get_me(
     current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
 ) -> UserResponse:
     """Get the currently authenticated user's profile."""
-    return UserResponse.model_validate(current_user)
+    result = await db.execute(
+        select(OrgUser.org_id).where(OrgUser.user_id == current_user.id).limit(1)
+    )
+    org_id = result.scalar_one_or_none()
+    data = UserResponse.model_validate(current_user)
+    data.org_id = org_id
+    return data

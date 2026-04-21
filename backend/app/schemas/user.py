@@ -16,6 +16,7 @@ class UserResponse(BaseModel):
     email: EmailStr
     is_active: bool
     created_at: datetime
+    org_id: UUID | None = None
 
     model_config = {"from_attributes": True}
 

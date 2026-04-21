@@ -16,12 +16,14 @@ from app.api.campaign_metrics import router as campaign_metrics_router
 from app.api.conversions import router as conversions_router
 from app.api.cron import router as cron_router
 from app.api.olap import router as olap_router
+from app.api.diagnostics import router as diagnostics_router
 
 api_router = APIRouter()
 
 api_router.include_router(health_router, tags=["health"])
 api_router.include_router(auth_router, prefix="/auth", tags=["auth"])
 api_router.include_router(organizations_router, prefix="/organizations", tags=["organizations"])
+api_router.include_router(diagnostics_router, prefix="/organizations", tags=["diagnostics"])
 api_router.include_router(manychat_router, prefix="/manychat", tags=["manychat"])
 api_router.include_router(products_router, prefix="/products", tags=["products"])
 api_router.include_router(ai_config_router, prefix="/ai-config", tags=["ai-config"])

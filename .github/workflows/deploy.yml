@@ -58,7 +58,7 @@ jobs:
             echo "Request_URL=${{ secrets.REQUEST_URL }}" >> .env
 
             echo ">>> Restarting Docker..."
-            docker-compose down
+            docker-compose down --remove-orphans
             docker-compose up -d --build
             echo ">>> Deploy complete!"
             docker-compose ps

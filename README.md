@@ -1,5 +1,8 @@
 # Attora
 
+
+
+
 White-labeled ManyChat platform with an AI conversation engine and Revenue Activation System (RAS) dashboard. Attora plugs into ManyChat via the External Request action, classifies subscriber intent with Claude Haiku, generates contextual sales responses with Claude Sonnet, and feeds conversion data back to Meta ads through the Conversions API.
 
 ## Architecture

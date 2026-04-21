@@ -11,7 +11,6 @@ import ProductsPage from './pages/ProductsPage';
 import AIConfigPage from './pages/AIConfigPage';
 import AnalyticsPage from './pages/AnalyticsPage';
 import SettingsPage from './pages/SettingsPage';
-import CampaignsPage from './pages/CampaignsPage';
 
 export default function App() {
   return (
@@ -31,7 +30,6 @@ export default function App() {
         <Route path="/conversations/:id" element={<ConversationDetailPage />} />
         <Route path="/leads" element={<LeadsPage />} />
         <Route path="/leads/:id" element={<LeadDetailPage />} />
-        <Route path="/campaigns" element={<CampaignsPage />} />
         <Route path="/products" element={<ProductsPage />} />
         <Route path="/ai-config" element={<AIConfigPage />} />
         <Route path="/analytics" element={<AnalyticsPage />} />

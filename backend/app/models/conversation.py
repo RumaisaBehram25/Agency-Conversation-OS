@@ -52,7 +52,6 @@ class Conversation(Base, TimestampMixin, OrgScopedMixin):
         index=True,
     )
     summary: Mapped[str | None] = mapped_column(Text, nullable=True)
-    last_message_preview: Mapped[str | None] = mapped_column(Text, nullable=True)
     message_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     ai_response_time_avg_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
 

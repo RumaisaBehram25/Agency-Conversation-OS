@@ -10,6 +10,7 @@ X-Attora-Key header (NOT JWT), validated against organizations.attora_api_key.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 import uuid
@@ -23,12 +24,16 @@ from app.models.organization import Organization
 from app.redis import get_redis_pool
 from app.schemas.manychat import ManyChatWebhookRequest, ManyChatWebhookResponse
 from app.security.encryption import decrypt_value
-from app.services.ai_engine import generate_ai_response
+from app.services.ai_engine import process_message
 from app.services.fallback import FallbackType, get_fallback_manychat_response
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+# Total endpoint time budget (ManyChat requires response within 10s)
+_ENDPOINT_TIMEOUT_SECONDS = 9.5  # Leave 500ms buffer for serialization
+
 
 async def _authenticate_api_key(
     x_attora_key: str = Header(..., description="Attora API key for webhook auth"),
@@ -132,26 +137,9 @@ async def manychat_webhook(
     """
     start_time = time.monotonic()
 
-    logger.info("🔔 Incoming ManyChat webhook: %s", request.model_dump())
-
     subscriber_id = request.subscriber.id
-
-    message = (request.last_input_text or "").strip()
+    message = request.last_input_text
     channel = request.channel
-
-    if not message:
-        logger.warning(
-            "⚠️ Empty last_input_text received: org=%s subscriber=%s channel=%s",
-            org_id,
-            subscriber_id,
-            channel,
-        )
-        return ManyChatWebhookResponse.from_ai_response(
-            response_text="Please send a message so I can help you 🙂",
-            buyer_stage=None,
-            quick_replies=None,
-            custom_field_updates=None,
-        )
 
     # Extract custom fields as dict
     custom_fields: dict = {}
@@ -180,17 +168,27 @@ async def manychat_webhook(
     except RuntimeError:
         logger.warning("Redis unavailable for webhook request")
 
-    # Process through AI pipeline wrapper
+    # Process through AI engine with timeout
     try:
-        ai_response = await generate_ai_response(
-            text=message,
-            subscriber_id=subscriber_id,
-            org_id=org_id,
-            channel=channel,
-            custom_fields=custom_fields,
-            db=db,
-            redis_client=redis_client,
+        ai_response = await asyncio.wait_for(
+            process_message(
+                org_id=org_id,
+                subscriber_id=subscriber_id,
+                message=message,
+                channel=channel,
+                custom_fields=custom_fields,
+                db=db,
+                redis_client=redis_client,
+            ),
+            timeout=_ENDPOINT_TIMEOUT_SECONDS,
         )
+    except asyncio.TimeoutError:
+        elapsed_ms = int((time.monotonic() - start_time) * 1000)
+        logger.warning(
+            f"Webhook timeout after {elapsed_ms}ms for org={org_id}, "
+            f"subscriber={subscriber_id}"
+        )
+        return get_fallback_manychat_response(FallbackType.BUYING_TIME)
     except Exception as e:
         elapsed_ms = int((time.monotonic() - start_time) * 1000)
         logger.error(

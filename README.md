@@ -10,7 +10,7 @@ White-labeled ManyChat platform with an AI conversation engine and Revenue Activ
 │   ManyChat   │     │                                                          │
 │  (External   │────▶│  ┌─────────┐    ┌───────────┐    ┌────────────────────┐  │
 │   Request)   │◀────│  │  nginx   │───▶│  FastAPI   │───▶│  PostgreSQL 16     │  │
-│              │     │  │  :8080   │    │  :8000    │    │  :5432             │  │
+│              │     │  │  :3000   │    │  :8000    │    │  :5432             │  │
 └──────────────┘     │  └─────────┘    └─────┬─────┘    └────────────────────┘  │
                      │       │               │                                  │
 ┌──────────────┐     │  React SPA        ┌───┴───┐      ┌────────────────────┐  │
@@ -25,7 +25,7 @@ White-labeled ManyChat platform with an AI conversation engine and Revenue Activ
 | Service | Image | Port | Purpose |
 |---------|-------|------|---------|
 | `api` | Python 3.12 / uvicorn | 8000 | FastAPI backend |
-| `frontend` | nginx 1.27-alpine | 8080 | React SPA + reverse proxy |
+| `frontend` | nginx 1.27-alpine | 3000 | React SPA + reverse proxy |
 | `postgres` | postgres:16-alpine | 5432 | Primary database |
 | `redis` | redis:7-alpine | 6379 | Cache, rate limiting, session context |
 
@@ -67,6 +67,55 @@ docker-compose up --build
 
 This starts all four services. Postgres and Redis include health checks — the API waits for both to be healthy before starting.
 
+### Optional: start the self-hosted OLAP profile
+
+Phase 1 keeps the existing UI and API behavior unchanged, but the backend can now be configured with an OLAP object store for parallel exports and parity checks.
+
+```bash
+docker-compose --profile olap-selfhosted up --build
+```
+
+With the self-hosted profile enabled, MinIO is exposed at `http://localhost:9002` and the S3-compatible API is exposed at `http://localhost:9001`.
+
+Set these env values in `.env` when using the self-hosted profile:
+
+```bash
+OLAP_STORAGE_PROVIDER=s3
+OLAP_QUERY_PROVIDER=trino
+OLAP_BUCKET=attora-analytics
+OLAP_PREFIX=lake
+OLAP_ENDPOINT=http://minio:9000
+OLAP_ACCESS_KEY_ID=minioadmin
+OLAP_SECRET_ACCESS_KEY=minioadmin
+OLAP_S3_FORCE_PATH_STYLE=true
+OLAP_SECURE=false
+OLAP_SCHEDULER_ENABLED=true
+TRINO_HOST=trino
+TRINO_PORT=8080
+TRINO_HOST_PORT=8083
+TRINO_USER=attora
+TRINO_CATALOG=lakehouse
+TRINO_SCHEMA=default
+```
+
+Later, the same backend code can be pointed at AWS by changing the same env contract to S3 and Athena values.
+
+The self-hosted profile now includes a scheduler container that runs phase 1 OLAP maintenance jobs from env-configured cron expressions. By default it exports `daily_analytics` and `ai_usage_events`, shadow-archives old messages in 7-day windows, and runs both low-level dataset parity and reporting parity checks by org/date range.
+
+The same profile now also starts a Hive metastore and Trino. Existing `/api/*` routes remain PostgreSQL-backed and are the stable frontend path. Additive Trino-backed mirrors are available under `/api/olap/*` with the same response formats for dashboard, analytics, ROI, AI performance, exports, and campaign drill-downs.
+
+Frontend guidance:
+
+- Use `/api/dashboard`, `/api/analytics*`, and `/api/campaigns*` for the current production UI flow.
+- Use `/api/olap/*` only for experimental or side-by-side OLAP validation flows.
+- There is no longer a root-route toggle for switching `/api/*` to OLAP; OLAP access is isolated under `/api/olap/*`.
+
+There is also a manual trigger endpoint for OLAP maintenance jobs at `POST /api/olap/jobs/trigger`. Supported jobs are `export_daily_analytics`, `export_ai_usage`, `archive_messages`, `check_olap_parity`, and `check_reporting_parity`.
+
+Trino is published on `http://localhost:8083` by default to avoid collisions with other local services. The application still connects to Trino internally with `TRINO_HOST=trino` and `TRINO_PORT=8080`.
+
+Checkpoint metadata is stored in object storage under the configured checkpoint prefix, so scheduled exports and archives process delta windows instead of rescanning full historical partitions on every run.
+
 ### 3. Run the database migration
 
 ```bash
@@ -75,9 +124,22 @@ docker-compose exec api alembic upgrade head
 
 This creates all 10 tables, 6 enums, and indexes.
 
-### 4. Access the app
+### 4. Seed the knowledge base
 
-- **Dashboard**: http://localhost:8080
+The seed script and PDF live outside the `backend/` build context, so copy them into the running `api` container first, then run. `psycopg2-binary` is needed because the script uses the sync SQLAlchemy driver.
+
+```bash
+docker cp scripts/seed_knowledge.py attora-api-1:/seed.py
+docker cp Overcome7Objections.pdf attora-api-1:/Overcome7Objections.pdf
+docker-compose exec api pip install psycopg2-binary
+docker-compose exec api python /seed.py
+```
+
+This parses `Overcome7Objections.pdf` into ~37 chunked documents with keyword tags and inserts them into the `knowledge_documents` table. The script is idempotent — safe to re-run.
+
+### 5. Access the app
+
+- **Dashboard**: http://localhost:3000
 - **API docs** (dev mode): http://localhost:8000/api/docs
 - **Health check**: http://localhost:8000/api/health
 
@@ -655,6 +717,8 @@ Vite dev server runs on `http://localhost:5173` with hot reload. API calls proxy
 alembic upgrade head    # Apply all migrations
 alembic downgrade -1    # Roll back one step
 ```
+
+> **Before running in prod:** run `alembic upgrade head` to apply migration 004 (`ai_usage_events` table for per-org Claude cost tracking).
 
 ## Cron Jobs
 

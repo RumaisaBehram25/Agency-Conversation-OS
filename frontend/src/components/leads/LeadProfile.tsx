@@ -56,6 +56,18 @@ export default function LeadProfile({ lead }: LeadProfileProps) {
               <dt className="text-xs text-gray-500">Last Contact</dt>
               <dd className="text-sm text-gray-700">{lead.last_message_at ? formatDate(lead.last_message_at) : '—'}</dd>
             </div>
+            {lead.email && (
+              <div>
+                <dt className="text-xs text-gray-500">Email</dt>
+                <dd className="text-sm text-gray-700">{lead.email}</dd>
+              </div>
+            )}
+            {lead.phone && (
+              <div>
+                <dt className="text-xs text-gray-500">Phone</dt>
+                <dd className="text-sm text-gray-700">{lead.phone}</dd>
+              </div>
+            )}
           </dl>
         </div>
 

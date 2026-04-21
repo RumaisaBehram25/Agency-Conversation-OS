@@ -38,6 +38,16 @@ class Sentiment(str, enum.Enum):
     NEGATIVE = "negative"
 
 
+class TokenUsage(BaseModel):
+    """Per-call Anthropic token usage for cost attribution."""
+
+    model: str | None = None
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cache_read_tokens: int = 0
+    cache_creation_tokens: int = 0
+
+
 class ClassificationResult(BaseModel):
     """Output of the Haiku intent classifier."""
 
@@ -53,6 +63,7 @@ class ClassificationResult(BaseModel):
     confidence: float = Field(
         default=0.5, ge=0.0, le=1.0, description="Classification confidence score"
     )
+    usage: TokenUsage | None = None
 
 
 # ── Conversation Context ──────────────────────────────────────
@@ -80,6 +91,7 @@ class SubscriberContext(BaseModel):
     channel: str = "messenger"
     ctwa_clid: str | None = None
     ad_id: str | None = None
+    post_id: str | None = None
 
 
 class ConversationContext(BaseModel):
@@ -91,6 +103,7 @@ class ConversationContext(BaseModel):
     history: list[MessageContext] = Field(default_factory=list)
     current_message: str
     message_count: int = 0
+    retrieved_knowledge: list[str] = Field(default_factory=list)
 
 
 # ── Client Configuration (cached) ────────────────────────────
@@ -119,7 +132,7 @@ class AIConfigData(BaseModel):
     system_prompt_override: str | None = None
     product_knowledge: str | None = None
     compliance_rules: str | None = None
-    conversion_playbook: str | None = None
+    conversion_playbook: list | None = None
     objection_handlers: dict | None = None
     greeting_message: str | None = None
     fallback_message: str | None = None
@@ -173,6 +186,7 @@ class AIResponse(BaseModel):
         default=0, description="Total response generation time in ms"
     )
     tokens_used: int = Field(default=0, description="Total tokens consumed")
+    usage: TokenUsage | None = None
     needs_human_handoff: bool = Field(
         default=False, description="Whether a human agent should take over"
     )

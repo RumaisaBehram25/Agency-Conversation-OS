@@ -175,6 +175,63 @@ export interface SubscriberDetail {
   conversations: SubscriberConversation[];
 }
 
+// ─── Campaigns ──────────────────────────────────────────────────────────────
+
+export interface CampaignSummary {
+  meta_campaign_id: string;
+  meta_campaign_name: string | null;
+  status: string | null;
+  spend: number;
+  impressions: number;
+  clicks: number;
+  leads: number;
+  link_clicks: number;
+  video_views: number;
+  cpc: number | null;
+  cpm: number | null;
+  ctr: number | null;
+}
+
+export interface AdSetSummary {
+  meta_adset_id: string;
+  meta_adset_name: string | null;
+  status: string | null;
+  spend: number;
+  impressions: number;
+  clicks: number;
+  leads: number;
+  link_clicks: number;
+  video_views: number;
+  cpc: number | null;
+  cpm: number | null;
+  ctr: number | null;
+}
+
+export interface AdSummary {
+  meta_ad_id: string;
+  meta_ad_name: string | null;
+  status: string | null;
+  spend: number;
+  impressions: number;
+  clicks: number;
+  leads: number;
+  link_clicks: number;
+  video_views: number;
+  cpc: number | null;
+  cpm: number | null;
+  ctr: number | null;
+}
+
+// ─── Breakdowns ─────────────────────────────────────────────────────────────
+
+export interface BreakdownItem {
+  breakdown_key: string;
+  spend: number;
+  impressions: number;
+  clicks: number;
+  leads: number;
+}
+
 // ─── Analytics ───────────────────────────────────────────────────────────────
 
 export interface DailyTrend {
@@ -241,68 +298,6 @@ export interface DashboardResponse {
   todays_conversions: number;
   todays_revenue: number;
   campaign_health: CampaignHealth[];
-}
-
-// ─── Campaigns & UTMs ────────────────────────────────────────────────────────
-
-export interface CampaignUTM {
-  id: string;
-  campaign_id: string;
-  utm_source: string;
-  utm_medium: string;
-  utm_campaign: string;
-  product_page_url: string | null;
-  checkout_url: string | null;
-  success_url: string | null;
-  product_page_utm_url: string | null;
-  checkout_utm_url: string | null;
-  success_utm_url: string | null;
-  created_at: string;
-  updated_at: string;
-}
-
-export interface AdCampaign {
-  id: string;
-  org_id: string;
-  name: string;
-  description: string | null;
-  meta_campaign_id: string | null;
-  meta_ad_set_id: string | null;
-  is_attora_managed: boolean;
-  product_id: string | null;
-  is_active: boolean;
-  utm: CampaignUTM | null;
-  created_at: string;
-  updated_at: string;
-}
-
-export interface CampaignCreate {
-  name: string;
-  description?: string;
-  meta_campaign_id?: string;
-  meta_ad_set_id?: string;
-  is_attora_managed?: boolean;
-  product_id?: string;
-  is_active?: boolean;
-}
-
-export interface CampaignUpdate {
-  name?: string;
-  description?: string;
-  meta_campaign_id?: string;
-  meta_ad_set_id?: string;
-  is_attora_managed?: boolean;
-  product_id?: string;
-  is_active?: boolean;
-}
-
-export interface UTMGenerateRequest {
-  product_page_url?: string;
-  checkout_url?: string;
-  success_url?: string;
-  utm_source?: string;
-  utm_medium?: string;
-  utm_campaign?: string;
 }
 
 // ─── Settings ────────────────────────────────────────────────────────────────

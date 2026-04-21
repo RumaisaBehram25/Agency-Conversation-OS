@@ -33,6 +33,7 @@ from app.services.context_manager import (
     store_message_and_update_context,
 )
 from app.services.fallback import FallbackType, get_fallback_response
+from app.services.knowledge_retriever import retrieve_knowledge
 from app.services.output_validator import validate_output
 from app.services.response_generator import generate_response
 
@@ -40,34 +41,6 @@ logger = logging.getLogger(__name__)
 
 # Total pipeline time budget
 _TOTAL_TIMEOUT_SECONDS = 10.0
-
-
-def _log_background_task_result(task: asyncio.Task) -> None:
-    try:
-        task.result()
-    except Exception:
-        logger.exception("Background message writer failed")
-
-
-def _schedule_message_persistence(
-    context,
-    message: str,
-    ai_response: AIResponse,
-    redis_client,
-) -> None:
-    logger.info(
-        "Scheduling background message writer conversation_id=%s",
-        context.conversation_id,
-    )
-    task = asyncio.create_task(
-        store_message_and_update_context(
-            context=context,
-            user_message=message,
-            ai_response=ai_response,
-            redis_client=redis_client,
-        )
-    )
-    task.add_done_callback(_log_background_task_result)
 
 
 async def process_message(
@@ -80,43 +53,12 @@ async def process_message(
     redis_client=None,
 ) -> AIResponse:
     """
-    Backwards-compatible wrapper for legacy callers.
-
-    Delegates to generate_ai_response so timeout/fallback/latency behavior
-    is centralized in one entrypoint.
-    """
-    return await generate_ai_response(
-        text=message,
-        subscriber_id=subscriber_id,
-        org_id=org_id,
-        channel=channel,
-        custom_fields=custom_fields,
-        db=db,
-        redis_client=redis_client,
-    )
-
-
-async def generate_ai_response(
-    text: str,
-    subscriber_id: str,
-    *,
-    org_id: uuid.UUID,
-    channel: str,
-    custom_fields: dict | None = None,
-    db: AsyncSession | None = None,
-    redis_client=None,
-) -> AIResponse:
-    """
-    Main AI pipeline entrypoint for webhook and service callers.
-
-    This function isolates all external AI behavior behind a single boundary,
-    applies timeout handling, and always returns a safe fallback response on
-    failure.
+    Main AI engine entry point — orchestrates the full conversation pipeline.
 
     Args:
-        text: The user's message text.
-        subscriber_id: ManyChat subscriber ID string.
         org_id: Organization UUID.
+        subscriber_id: ManyChat subscriber ID string.
+        message: The user's message text.
         channel: Messaging channel (whatsapp, messenger, instagram).
         custom_fields: ManyChat custom fields dict.
         db: Async database session.
@@ -127,30 +69,13 @@ async def generate_ai_response(
     """
     pipeline_start = time.monotonic()
     custom_fields = custom_fields or {}
-    safe_text = (text or "").strip()
-
-    logger.info(
-        "AI request start org=%s subscriber=%s channel=%s message_length=%s",
-        org_id,
-        subscriber_id,
-        channel,
-        len(safe_text),
-    )
-
-    if not safe_text:
-        logger.warning(
-            "AI request received empty text org=%s subscriber=%s",
-            org_id,
-            subscriber_id,
-        )
-        return get_fallback_response(FallbackType.ERROR)
 
     try:
-        response = await asyncio.wait_for(
+        return await asyncio.wait_for(
             _run_pipeline(
                 org_id=org_id,
                 subscriber_id=subscriber_id,
-                message=safe_text,
+                message=message,
                 channel=channel,
                 custom_fields=custom_fields,
                 db=db,
@@ -159,15 +84,6 @@ async def generate_ai_response(
             ),
             timeout=_TOTAL_TIMEOUT_SECONDS,
         )
-        elapsed_ms = int((time.monotonic() - pipeline_start) * 1000)
-        logger.info(
-            "AI request complete in %sms org=%s subscriber=%s model=%s",
-            elapsed_ms,
-            org_id,
-            subscriber_id,
-            response.model_used,
-        )
-        return response
     except asyncio.TimeoutError:
         elapsed_ms = int((time.monotonic() - pipeline_start) * 1000)
         logger.warning(f"Pipeline timeout after {elapsed_ms}ms for org={org_id}")
@@ -215,10 +131,22 @@ async def _run_pipeline(
         f"Step 2 (context_load): {int((time.monotonic() - step_start) * 1000)}ms"
     )
 
-    # Persist the request-scoped subscriber/conversation writes before
-    # handing off message storage to the fire-and-forget worker.
+    # ── Step 2.5: Retrieve knowledge (<1s via Haiku) ──────────
     if db is not None:
-        await db.commit()
+        try:
+            step_start = time.monotonic()
+            knowledge = await retrieve_knowledge(
+                message=message,
+                buyer_stage=context.subscriber.buyer_stage,
+                db=db,
+            )
+            context.retrieved_knowledge = knowledge
+            logger.debug(
+                f"Step 2.5 (knowledge): {int((time.monotonic() - step_start) * 1000)}ms "
+                f"docs={len(knowledge)}"
+            )
+        except Exception as e:
+            logger.error(f"Knowledge retrieval failed, continuing pipeline: {e}")
 
     # ── Step 3: Classify intent (<500ms via Haiku) ─────────────
     step_start = time.monotonic()
@@ -226,18 +154,10 @@ async def _run_pipeline(
         f"Stage: {context.subscriber.buyer_stage}, "
         f"Messages: {context.subscriber.total_messages}"
     )
-    logger.info("🧠 Classifying intent for conversation_id=%s text=%s", context.conversation_id, message)
     classification = await classify_message(message, subscriber_brief)
     logger.debug(
         f"Step 3 (classify): {int((time.monotonic() - step_start) * 1000)}ms "
         f"intent={classification.intent}"
-    )
-    logger.info(
-        "🧠 Classified intent conversation_id=%s intent=%s is_simple=%s confidence=%s",
-        context.conversation_id,
-        classification.intent,
-        classification.is_simple,
-        classification.confidence,
     )
 
     # ── Step 4: Route — simple or complex ──────────────────────
@@ -246,58 +166,37 @@ async def _run_pipeline(
             classification.intent, org_config, context
         )
         if ai_response:
-            logger.info(
-                "🧭 Routed simple intent conversation_id=%s intent=%s response_model=%s",
-                context.conversation_id,
-                classification.intent,
-                ai_response.model_used,
-            )
             ai_response.response_time_ms = int(
                 (time.monotonic() - pipeline_start) * 1000
             )
-            _schedule_message_persistence(
-                context=context,
-                message=message,
-                ai_response=ai_response,
-                redis_client=redis_client,
+            # Fire-and-forget: store and update
+            asyncio.create_task(
+                store_message_and_update_context(
+                    context=context,
+                    user_message=message,
+                    ai_response=ai_response,
+                    redis_client=redis_client,
+                    classifier_usage=classification.usage,
+                )
             )
             return ai_response
 
     # ── Step 5: Generate response (<7s via Sonnet) ─────────────
     step_start = time.monotonic()
-    logger.info(
-        "🧭 Routing to full AI generation conversation_id=%s intent=%s",
-        context.conversation_id,
-        classification.intent,
-    )
     try:
         ai_response = await generate_response(context, org_config)
     except asyncio.TimeoutError:
         logger.warning("Sonnet generation timed out, using fallback")
-        fallback_response = get_fallback_response(
+        return get_fallback_response(
             FallbackType.BUYING_TIME,
             custom_fallback=org_config.ai_config.fallback_message,
         )
-        _schedule_message_persistence(
-            context=context,
-            message=message,
-            ai_response=fallback_response,
-            redis_client=redis_client,
-        )
-        return fallback_response
     except Exception as e:
         logger.error(f"Response generation failed: {e}")
-        fallback_response = get_fallback_response(
+        return get_fallback_response(
             FallbackType.ERROR,
             custom_fallback=org_config.ai_config.fallback_message,
         )
-        _schedule_message_persistence(
-            context=context,
-            message=message,
-            ai_response=fallback_response,
-            redis_client=redis_client,
-        )
-        return fallback_response
     logger.debug(
         f"Step 5 (generate): {int((time.monotonic() - step_start) * 1000)}ms"
     )
@@ -341,11 +240,14 @@ async def _run_pipeline(
     )
 
     # ── Step 7: Fire-and-forget operations ─────────────────────
-    _schedule_message_persistence(
-        context=context,
-        message=message,
-        ai_response=ai_response,
-        redis_client=redis_client,
+    asyncio.create_task(
+        store_message_and_update_context(
+            context=context,
+            user_message=message,
+            ai_response=ai_response,
+            redis_client=redis_client,
+            classifier_usage=classification.usage,
+        )
     )
 
     # Fire CAPI if conversion-ready

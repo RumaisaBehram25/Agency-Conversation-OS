@@ -1,243 +1,364 @@
 """
-Attora — Ad Campaign & UTM API Routes
+Attora — Campaign Drill-Down API Routes
 
-GET    /api/campaigns                     — List campaigns for org
-POST   /api/campaigns                     — Create campaign
-GET    /api/campaigns/{id}                — Get campaign details (includes UTM)
-PUT    /api/campaigns/{id}                — Update campaign
-DELETE /api/campaigns/{id}                — Delete campaign
-POST   /api/campaigns/{id}/generate-utms  — Generate / regenerate UTM URLs
+GET  /api/campaigns                                  — List campaigns with aggregated metrics
+GET  /api/campaigns/{campaign_id}                    — Campaign detail with daily time series
+GET  /api/campaigns/{campaign_id}/adsets             — Ad sets within a campaign
+GET  /api/campaigns/{campaign_id}/adsets/{adset_id}/ads — Ads within an ad set
+GET  /api/campaigns/{campaign_id}/breakdowns         — Breakdown data (age_gender or platform)
 """
 
 import uuid
+from datetime import date, timedelta
 
-from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import select
+from fastapi import APIRouter, Depends, HTTPException, Query, status
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
 
 from app.api.deps import get_current_user, get_org_id
 from app.database import get_db
-from app.models.campaign import AdCampaign, CampaignUTM
+from app.models.campaign_metrics import CampaignBreakdown, CampaignMetric
 from app.models.user import User
-from app.schemas.campaign import (
-    AdCampaignCreate,
-    AdCampaignResponse,
-    AdCampaignUpdate,
-    CampaignUTMResponse,
-    UTMGenerateRequest,
-    _slugify,
-    generate_utm_urls,
+from app.schemas.campaigns import (
+    AdSetSummary,
+    AdSummary,
+    BreakdownItem,
+    CampaignDailyMetric,
+    CampaignSummary,
 )
 
 router = APIRouter()
 
 
-async def _get_campaign_or_404(
-    campaign_id: uuid.UUID,
-    org_id: uuid.UUID,
-    db: AsyncSession,
-) -> AdCampaign:
-    result = await db.execute(
-        select(AdCampaign)
-        .options(selectinload(AdCampaign.utm))
-        .where(AdCampaign.id == campaign_id)
-        .where(AdCampaign.org_id == org_id)
-    )
-    campaign = result.scalar_one_or_none()
-    if campaign is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Campaign not found")
-    return campaign
+# ── Helpers ───────────────────────────────────────────────────
 
 
-@router.get("", response_model=list[AdCampaignResponse])
+def _default_date_from() -> date:
+    return date.today() - timedelta(days=30)
+
+
+def _default_date_to() -> date:
+    return date.today()
+
+
+def _coalesce_sum(column):
+    """SUM with COALESCE to 0 for nullable numeric columns."""
+    return func.coalesce(func.sum(column), 0)
+
+
+def _coalesce_avg(column):
+    """AVG with COALESCE to None for nullable numeric columns."""
+    return func.avg(column)
+
+
+# ── GET /api/campaigns ───────────────────────────────────────
+
+
+@router.get("", response_model=list[CampaignSummary])
 async def list_campaigns(
-    is_attora_managed: bool | None = None,
-    is_active: bool | None = None,
+    current_user: User = Depends(get_current_user),
     org_id: uuid.UUID = Depends(get_org_id),
     db: AsyncSession = Depends(get_db),
-    _: User = Depends(get_current_user),
-) -> list[AdCampaignResponse]:
-    """List all ad campaigns for the organization."""
+    date_from: date = Query(default_factory=_default_date_from),
+    date_to: date = Query(default_factory=_default_date_to),
+) -> list[CampaignSummary]:
+    """
+    List campaigns with aggregated metrics for the given date range.
+
+    Groups campaign-level rows by meta_campaign_id and returns
+    summed spend/impressions/clicks/leads/link_clicks/video_views,
+    averaged cpc/cpm/ctr, and the latest status and name.
+    Sorted by total spend descending.
+    """
     query = (
-        select(AdCampaign)
-        .options(selectinload(AdCampaign.utm))
-        .where(AdCampaign.org_id == org_id)
-        .order_by(AdCampaign.created_at.desc())
+        select(
+            CampaignMetric.meta_campaign_id,
+            func.max(CampaignMetric.meta_campaign_name).label("meta_campaign_name"),
+            func.max(CampaignMetric.status).label("status"),
+            _coalesce_sum(CampaignMetric.spend).label("spend"),
+            _coalesce_sum(CampaignMetric.impressions).label("impressions"),
+            _coalesce_sum(CampaignMetric.clicks).label("clicks"),
+            _coalesce_sum(CampaignMetric.leads).label("leads"),
+            _coalesce_sum(CampaignMetric.link_clicks).label("link_clicks"),
+            _coalesce_sum(CampaignMetric.video_views).label("video_views"),
+            _coalesce_avg(CampaignMetric.cpc).label("cpc"),
+            _coalesce_avg(CampaignMetric.cpm).label("cpm"),
+            _coalesce_avg(CampaignMetric.ctr).label("ctr"),
+        )
+        .where(CampaignMetric.org_id == org_id)
+        .where(CampaignMetric.level == "campaign")
+        .where(CampaignMetric.date >= date_from)
+        .where(CampaignMetric.date <= date_to)
+        .group_by(CampaignMetric.meta_campaign_id)
+        .order_by(func.coalesce(func.sum(CampaignMetric.spend), 0).desc())
     )
-    if is_attora_managed is not None:
-        query = query.where(AdCampaign.is_attora_managed == is_attora_managed)
-    if is_active is not None:
-        query = query.where(AdCampaign.is_active == is_active)
 
     result = await db.execute(query)
-    campaigns = result.scalars().all()
-    return [AdCampaignResponse.model_validate(c) for c in campaigns]
+    rows = result.all()
 
-
-@router.post("", response_model=AdCampaignResponse, status_code=status.HTTP_201_CREATED)
-async def create_campaign(
-    request: AdCampaignCreate,
-    org_id: uuid.UUID = Depends(get_org_id),
-    db: AsyncSession = Depends(get_db),
-    _: User = Depends(get_current_user),
-) -> AdCampaignResponse:
-    """Create a new ad campaign."""
-    campaign = AdCampaign(
-        org_id=org_id,
-        name=request.name,
-        description=request.description,
-        meta_campaign_id=request.meta_campaign_id,
-        meta_ad_set_id=request.meta_ad_set_id,
-        is_attora_managed=request.is_attora_managed,
-        product_id=request.product_id,
-        is_active=request.is_active,
-    )
-    db.add(campaign)
-    await db.flush()
-    await db.refresh(campaign)
-
-    result = await db.execute(
-        select(AdCampaign)
-        .options(selectinload(AdCampaign.utm))
-        .where(AdCampaign.id == campaign.id)
-    )
-    campaign = result.scalar_one()
-    return AdCampaignResponse.model_validate(campaign)
-
-
-@router.get("/{campaign_id}", response_model=AdCampaignResponse)
-async def get_campaign(
-    campaign_id: uuid.UUID,
-    org_id: uuid.UUID = Depends(get_org_id),
-    db: AsyncSession = Depends(get_db),
-    _: User = Depends(get_current_user),
-) -> AdCampaignResponse:
-    """Get campaign details including generated UTM URLs."""
-    campaign = await _get_campaign_or_404(campaign_id, org_id, db)
-    return AdCampaignResponse.model_validate(campaign)
-
-
-@router.put("/{campaign_id}", response_model=AdCampaignResponse)
-async def update_campaign(
-    campaign_id: uuid.UUID,
-    request: AdCampaignUpdate,
-    org_id: uuid.UUID = Depends(get_org_id),
-    db: AsyncSession = Depends(get_db),
-    _: User = Depends(get_current_user),
-) -> AdCampaignResponse:
-    """Update campaign fields."""
-    campaign = await _get_campaign_or_404(campaign_id, org_id, db)
-
-    update_data = request.model_dump(exclude_unset=True)
-    for field, value in update_data.items():
-        setattr(campaign, field, value)
-
-    await db.flush()
-    await db.refresh(campaign)
-
-    result = await db.execute(
-        select(AdCampaign)
-        .options(selectinload(AdCampaign.utm))
-        .where(AdCampaign.id == campaign.id)
-    )
-    campaign = result.scalar_one()
-    return AdCampaignResponse.model_validate(campaign)
-
-
-@router.delete("/{campaign_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_campaign(
-    campaign_id: uuid.UUID,
-    org_id: uuid.UUID = Depends(get_org_id),
-    db: AsyncSession = Depends(get_db),
-    _: User = Depends(get_current_user),
-) -> None:
-    """Delete a campaign and its associated UTMs."""
-    campaign = await _get_campaign_or_404(campaign_id, org_id, db)
-    await db.delete(campaign)
-    await db.flush()
-
-
-@router.post("/{campaign_id}/generate-utms", response_model=CampaignUTMResponse)
-async def generate_utms(
-    campaign_id: uuid.UUID,
-    request: UTMGenerateRequest,
-    org_id: uuid.UUID = Depends(get_org_id),
-    db: AsyncSession = Depends(get_db),
-    _: User = Depends(get_current_user),
-) -> CampaignUTMResponse:
-    """
-    Generate (or regenerate) UTM URLs for a campaign's conversion funnel.
-
-    Provide base URLs for the product page, checkout page, and/or success page.
-    Attora appends UTM parameters so you can track which visitors came from
-    Attora-driven conversations.
-
-    Copy the returned UTM URLs and apply them to your product pages.
-    """
-    campaign = await _get_campaign_or_404(campaign_id, org_id, db)
-
-    utm_campaign_slug = request.utm_campaign or _slugify(campaign.name)
-
-    product_utm, checkout_utm, success_utm = generate_utm_urls(
-        utm_source=request.utm_source,
-        utm_medium=request.utm_medium,
-        utm_campaign=utm_campaign_slug,
-        product_page_url=request.product_page_url,
-        checkout_url=request.checkout_url,
-        success_url=request.success_url,
-    )
-
-    # Upsert: update existing UTM record or create a new one
-    if campaign.utm:
-        utm = campaign.utm
-        utm.utm_source = request.utm_source
-        utm.utm_medium = request.utm_medium
-        utm.utm_campaign = utm_campaign_slug
-        if request.product_page_url is not None:
-            utm.product_page_url = request.product_page_url
-            utm.product_page_utm_url = product_utm
-        if request.checkout_url is not None:
-            utm.checkout_url = request.checkout_url
-            utm.checkout_utm_url = checkout_utm
-        if request.success_url is not None:
-            utm.success_url = request.success_url
-            utm.success_utm_url = success_utm
-    else:
-        utm = CampaignUTM(
-            org_id=org_id,
-            campaign_id=campaign_id,
-            utm_source=request.utm_source,
-            utm_medium=request.utm_medium,
-            utm_campaign=utm_campaign_slug,
-            product_page_url=request.product_page_url,
-            checkout_url=request.checkout_url,
-            success_url=request.success_url,
-            product_page_utm_url=product_utm,
-            checkout_utm_url=checkout_utm,
-            success_utm_url=success_utm,
+    return [
+        CampaignSummary(
+            meta_campaign_id=row.meta_campaign_id,
+            meta_campaign_name=row.meta_campaign_name,
+            status=row.status,
+            spend=float(row.spend) if row.spend else 0.0,
+            impressions=int(row.impressions) if row.impressions else 0,
+            clicks=int(row.clicks) if row.clicks else 0,
+            leads=int(row.leads) if row.leads else 0,
+            link_clicks=int(row.link_clicks) if row.link_clicks else 0,
+            video_views=int(row.video_views) if row.video_views else 0,
+            cpc=float(row.cpc) if row.cpc is not None else None,
+            cpm=float(row.cpm) if row.cpm is not None else None,
+            ctr=float(row.ctr) if row.ctr is not None else None,
         )
-        db.add(utm)
-
-    await db.flush()
-    await db.refresh(utm)
-    return CampaignUTMResponse.model_validate(utm)
+        for row in rows
+    ]
 
 
-@router.get("/{campaign_id}/utms", response_model=CampaignUTMResponse)
-async def get_utms(
-    campaign_id: uuid.UUID,
+# ── GET /api/campaigns/{campaign_id} ─────────────────────────
+
+
+@router.get("/{campaign_id}", response_model=list[CampaignDailyMetric])
+async def get_campaign_detail(
+    campaign_id: str,
+    current_user: User = Depends(get_current_user),
     org_id: uuid.UUID = Depends(get_org_id),
     db: AsyncSession = Depends(get_db),
-    _: User = Depends(get_current_user),
-) -> CampaignUTMResponse:
-    """Get the current UTM URLs for a campaign."""
-    campaign = await _get_campaign_or_404(campaign_id, org_id, db)
+    date_from: date = Query(default_factory=_default_date_from),
+    date_to: date = Query(default_factory=_default_date_to),
+) -> list[CampaignDailyMetric]:
+    """
+    Campaign detail with daily time series.
 
-    if campaign.utm is None:
+    Returns one row per day for the given campaign within the date range,
+    ordered by date ascending.
+    """
+    query = (
+        select(
+            CampaignMetric.date,
+            CampaignMetric.spend,
+            CampaignMetric.impressions,
+            CampaignMetric.clicks,
+            CampaignMetric.leads,
+            CampaignMetric.cpc,
+            CampaignMetric.cpm,
+            CampaignMetric.ctr,
+            CampaignMetric.reach,
+            CampaignMetric.frequency,
+        )
+        .where(CampaignMetric.org_id == org_id)
+        .where(CampaignMetric.level == "campaign")
+        .where(CampaignMetric.meta_campaign_id == campaign_id)
+        .where(CampaignMetric.date >= date_from)
+        .where(CampaignMetric.date <= date_to)
+        .order_by(CampaignMetric.date.asc())
+    )
+
+    result = await db.execute(query)
+    rows = result.all()
+
+    return [
+        CampaignDailyMetric(
+            date=row.date,
+            spend=float(row.spend) if row.spend else 0.0,
+            impressions=int(row.impressions) if row.impressions else 0,
+            clicks=int(row.clicks) if row.clicks else 0,
+            leads=int(row.leads) if row.leads else 0,
+            cpc=float(row.cpc) if row.cpc is not None else None,
+            cpm=float(row.cpm) if row.cpm is not None else None,
+            ctr=float(row.ctr) if row.ctr is not None else None,
+            reach=int(row.reach) if row.reach else 0,
+            frequency=float(row.frequency) if row.frequency is not None else None,
+        )
+        for row in rows
+    ]
+
+
+# ── GET /api/campaigns/{campaign_id}/adsets ──────────────────
+
+
+@router.get("/{campaign_id}/adsets", response_model=list[AdSetSummary])
+async def list_adsets(
+    campaign_id: str,
+    current_user: User = Depends(get_current_user),
+    org_id: uuid.UUID = Depends(get_org_id),
+    db: AsyncSession = Depends(get_db),
+    date_from: date = Query(default_factory=_default_date_from),
+    date_to: date = Query(default_factory=_default_date_to),
+) -> list[AdSetSummary]:
+    """
+    List ad sets within a campaign with aggregated metrics.
+
+    Groups adset-level rows by meta_adset_id and returns
+    aggregated metrics sorted by spend descending.
+    """
+    query = (
+        select(
+            CampaignMetric.meta_adset_id,
+            func.max(CampaignMetric.meta_adset_name).label("meta_adset_name"),
+            func.max(CampaignMetric.status).label("status"),
+            _coalesce_sum(CampaignMetric.spend).label("spend"),
+            _coalesce_sum(CampaignMetric.impressions).label("impressions"),
+            _coalesce_sum(CampaignMetric.clicks).label("clicks"),
+            _coalesce_sum(CampaignMetric.leads).label("leads"),
+            _coalesce_sum(CampaignMetric.link_clicks).label("link_clicks"),
+            _coalesce_sum(CampaignMetric.video_views).label("video_views"),
+            _coalesce_avg(CampaignMetric.cpc).label("cpc"),
+            _coalesce_avg(CampaignMetric.cpm).label("cpm"),
+            _coalesce_avg(CampaignMetric.ctr).label("ctr"),
+        )
+        .where(CampaignMetric.org_id == org_id)
+        .where(CampaignMetric.level == "adset")
+        .where(CampaignMetric.meta_campaign_id == campaign_id)
+        .where(CampaignMetric.date >= date_from)
+        .where(CampaignMetric.date <= date_to)
+        .group_by(CampaignMetric.meta_adset_id)
+        .order_by(func.coalesce(func.sum(CampaignMetric.spend), 0).desc())
+    )
+
+    result = await db.execute(query)
+    rows = result.all()
+
+    return [
+        AdSetSummary(
+            meta_adset_id=row.meta_adset_id,
+            meta_adset_name=row.meta_adset_name,
+            status=row.status,
+            spend=float(row.spend) if row.spend else 0.0,
+            impressions=int(row.impressions) if row.impressions else 0,
+            clicks=int(row.clicks) if row.clicks else 0,
+            leads=int(row.leads) if row.leads else 0,
+            link_clicks=int(row.link_clicks) if row.link_clicks else 0,
+            video_views=int(row.video_views) if row.video_views else 0,
+            cpc=float(row.cpc) if row.cpc is not None else None,
+            cpm=float(row.cpm) if row.cpm is not None else None,
+            ctr=float(row.ctr) if row.ctr is not None else None,
+        )
+        for row in rows
+    ]
+
+
+# ── GET /api/campaigns/{campaign_id}/adsets/{adset_id}/ads ───
+
+
+@router.get(
+    "/{campaign_id}/adsets/{adset_id}/ads",
+    response_model=list[AdSummary],
+)
+async def list_ads(
+    campaign_id: str,
+    adset_id: str,
+    current_user: User = Depends(get_current_user),
+    org_id: uuid.UUID = Depends(get_org_id),
+    db: AsyncSession = Depends(get_db),
+    date_from: date = Query(default_factory=_default_date_from),
+    date_to: date = Query(default_factory=_default_date_to),
+) -> list[AdSummary]:
+    """
+    List ads within an ad set with aggregated metrics.
+
+    Groups ad-level rows by meta_ad_id and returns
+    aggregated metrics sorted by spend descending.
+    """
+    query = (
+        select(
+            CampaignMetric.meta_ad_id,
+            func.max(CampaignMetric.meta_ad_name).label("meta_ad_name"),
+            func.max(CampaignMetric.status).label("status"),
+            _coalesce_sum(CampaignMetric.spend).label("spend"),
+            _coalesce_sum(CampaignMetric.impressions).label("impressions"),
+            _coalesce_sum(CampaignMetric.clicks).label("clicks"),
+            _coalesce_sum(CampaignMetric.leads).label("leads"),
+            _coalesce_sum(CampaignMetric.link_clicks).label("link_clicks"),
+            _coalesce_sum(CampaignMetric.video_views).label("video_views"),
+            _coalesce_avg(CampaignMetric.cpc).label("cpc"),
+            _coalesce_avg(CampaignMetric.cpm).label("cpm"),
+            _coalesce_avg(CampaignMetric.ctr).label("ctr"),
+        )
+        .where(CampaignMetric.org_id == org_id)
+        .where(CampaignMetric.level == "ad")
+        .where(CampaignMetric.meta_campaign_id == campaign_id)
+        .where(CampaignMetric.meta_adset_id == adset_id)
+        .where(CampaignMetric.date >= date_from)
+        .where(CampaignMetric.date <= date_to)
+        .group_by(CampaignMetric.meta_ad_id)
+        .order_by(func.coalesce(func.sum(CampaignMetric.spend), 0).desc())
+    )
+
+    result = await db.execute(query)
+    rows = result.all()
+
+    return [
+        AdSummary(
+            meta_ad_id=row.meta_ad_id,
+            meta_ad_name=row.meta_ad_name,
+            status=row.status,
+            spend=float(row.spend) if row.spend else 0.0,
+            impressions=int(row.impressions) if row.impressions else 0,
+            clicks=int(row.clicks) if row.clicks else 0,
+            leads=int(row.leads) if row.leads else 0,
+            link_clicks=int(row.link_clicks) if row.link_clicks else 0,
+            video_views=int(row.video_views) if row.video_views else 0,
+            cpc=float(row.cpc) if row.cpc is not None else None,
+            cpm=float(row.cpm) if row.cpm is not None else None,
+            ctr=float(row.ctr) if row.ctr is not None else None,
+        )
+        for row in rows
+    ]
+
+
+# ── GET /api/campaigns/{campaign_id}/breakdowns ──────────────
+
+
+@router.get("/{campaign_id}/breakdowns", response_model=list[BreakdownItem])
+async def get_campaign_breakdowns(
+    campaign_id: str,
+    current_user: User = Depends(get_current_user),
+    org_id: uuid.UUID = Depends(get_org_id),
+    db: AsyncSession = Depends(get_db),
+    type: str = Query(..., description='Breakdown type: "age_gender" or "platform"'),
+    date_from: date = Query(default_factory=_default_date_from),
+    date_to: date = Query(default_factory=_default_date_to),
+) -> list[BreakdownItem]:
+    """
+    Get breakdown data (age_gender or platform) for a campaign.
+
+    Groups by breakdown_key and returns aggregated
+    spend/impressions/clicks/leads sorted by spend descending.
+    """
+    if type not in ("age_gender", "platform"):
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="No UTMs generated yet. Call POST /generate-utms first.",
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail='Invalid breakdown type. Must be "age_gender" or "platform".',
         )
 
-    return CampaignUTMResponse.model_validate(campaign.utm)
+    query = (
+        select(
+            CampaignBreakdown.breakdown_key,
+            _coalesce_sum(CampaignBreakdown.spend).label("spend"),
+            _coalesce_sum(CampaignBreakdown.impressions).label("impressions"),
+            _coalesce_sum(CampaignBreakdown.clicks).label("clicks"),
+            _coalesce_sum(CampaignBreakdown.leads).label("leads"),
+        )
+        .where(CampaignBreakdown.org_id == org_id)
+        .where(CampaignBreakdown.meta_campaign_id == campaign_id)
+        .where(CampaignBreakdown.breakdown_type == type)
+        .where(CampaignBreakdown.date >= date_from)
+        .where(CampaignBreakdown.date <= date_to)
+        .group_by(CampaignBreakdown.breakdown_key)
+        .order_by(func.coalesce(func.sum(CampaignBreakdown.spend), 0).desc())
+    )
+
+    result = await db.execute(query)
+    rows = result.all()
+
+    return [
+        BreakdownItem(
+            breakdown_key=row.breakdown_key,
+            spend=float(row.spend) if row.spend else 0.0,
+            impressions=int(row.impressions) if row.impressions else 0,
+            clicks=int(row.clicks) if row.clicks else 0,
+            leads=int(row.leads) if row.leads else 0,
+        )
+        for row in rows
+    ]

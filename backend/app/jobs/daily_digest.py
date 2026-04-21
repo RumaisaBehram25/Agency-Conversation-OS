@@ -12,12 +12,14 @@ from datetime import date, datetime, timedelta, timezone
 from sqlalchemy import and_, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.models.ai_usage_event import AIUsageEvent
 from app.models.analytics import DailyAnalytics
 from app.models.conversation import Conversation
 from app.models.conversion import ConversionEvent
 from app.models.message import Message
 from app.models.organization import Organization
 from app.models.base import ChannelType, ConversationStatus, MessageSender
+from app.services.llm_pricing import compute_cost_usd
 
 logger = logging.getLogger("attora.jobs.daily_digest")
 
@@ -154,7 +156,6 @@ async def _compute_org_channel_stats(
     total_messages = 0
     avg_messages_per_conversation = None
     avg_ai_response_time_ms = None
-    ai_tokens_used = 0
     fallback_count = 0
 
     if conv_ids:
@@ -168,13 +169,11 @@ async def _compute_org_channel_stats(
             select(
                 func.count().label("total"),
                 func.avg(Message.ai_response_time_ms).label("avg_response_time"),
-                func.coalesce(func.sum(Message.ai_tokens_used), 0).label("tokens"),
             ).where(and_(*msg_filters))
         )
         msg_row = msg_result.one()
         total_messages = int(msg_row.total)
         avg_ai_response_time_ms = int(msg_row.avg_response_time) if msg_row.avg_response_time else None
-        ai_tokens_used = int(msg_row.tokens)
 
         if active_conversations > 0 and total_messages > 0:
             avg_messages_per_conversation = round(total_messages / active_conversations, 2)
@@ -215,8 +214,10 @@ async def _compute_org_channel_stats(
     if new_conversations > 0:
         conversion_rate = round(conversions / new_conversations, 4)
 
-    # AI cost estimate (simplified: $0.002 per 1K tokens for GPT-4o-mini)
-    ai_cost = round(ai_tokens_used * 0.000002, 4)
+    # AI token + cost rollup from ai_usage_events
+    ai_tokens_used, ai_cost = await _compute_ai_usage(
+        db, org_id, day_start, day_end, conv_ids, channel
+    )
 
     return {
         "new_conversations": new_conversations,
@@ -231,3 +232,53 @@ async def _compute_org_channel_stats(
         "ai_cost": ai_cost,
         "fallback_count": fallback_count,
     }
+
+
+async def _compute_ai_usage(
+    db: AsyncSession,
+    org_id: uuid.UUID,
+    day_start: datetime,
+    day_end: datetime,
+    conv_ids: list[uuid.UUID],
+    channel: ChannelType | None,
+) -> tuple[int, float]:
+    """
+    Group ai_usage_events by model for the given org/day/channel and compute
+    (total_tokens, total_cost_usd). Channel scope is applied via conv_ids.
+    """
+    filters = [
+        AIUsageEvent.org_id == org_id,
+        AIUsageEvent.created_at >= day_start,
+        AIUsageEvent.created_at <= day_end,
+    ]
+    if channel is not None:
+        if not conv_ids:
+            return 0, 0.0
+        filters.append(AIUsageEvent.conversation_id.in_(conv_ids))
+
+    result = await db.execute(
+        select(
+            AIUsageEvent.model,
+            func.coalesce(func.sum(AIUsageEvent.input_tokens), 0).label("input"),
+            func.coalesce(func.sum(AIUsageEvent.output_tokens), 0).label("output"),
+            func.coalesce(func.sum(AIUsageEvent.cache_read_tokens), 0).label("cache_read"),
+            func.coalesce(func.sum(AIUsageEvent.cache_creation_tokens), 0).label("cache_write"),
+        )
+        .where(and_(*filters))
+        .group_by(AIUsageEvent.model)
+    )
+
+    total_tokens = 0
+    total_cost = 0.0
+    for row in result.all():
+        total_tokens += int(row.input) + int(row.output)
+        cost = compute_cost_usd(
+            model=row.model,
+            input_tokens=int(row.input),
+            output_tokens=int(row.output),
+            cache_read_tokens=int(row.cache_read),
+            cache_creation_tokens=int(row.cache_write),
+        )
+        total_cost += float(cost)
+
+    return total_tokens, round(total_cost, 4)

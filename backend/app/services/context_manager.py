@@ -22,8 +22,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.database import async_session_factory
+from app.models.ai_usage_event import AIUsageEvent
 from app.models.base import BuyerStage, ChannelType, ConversationStatus, MessageSender
-from app.models.campaign import AdCampaign
+from app.models.campaign_metrics import CampaignMetric
 from app.models.conversation import Conversation
 from app.models.message import Message
 from app.models.subscriber import Subscriber
@@ -32,6 +33,7 @@ from app.schemas.ai_engine import (
     ConversationContext,
     MessageContext,
     SubscriberContext,
+    TokenUsage,
 )
 
 logger = logging.getLogger(__name__)
@@ -108,6 +110,7 @@ async def load_conversation_context(
         channel=channel,
         ctwa_clid=custom_fields.get("ctwa_clid") or subscriber.ctwa_clid,
         ad_id=custom_fields.get("ad_id") or subscriber.ad_id,
+        post_id=custom_fields.get("post_id") or subscriber.post_id,
     )
 
     return ConversationContext(
@@ -126,6 +129,7 @@ async def store_message_and_update_context(
     ai_response: AIResponse,
     db: AsyncSession | None = None,
     redis_client=None,
+    classifier_usage: TokenUsage | None = None,
 ) -> None:
     """
     Store the message exchange and update subscriber/conversation.
@@ -140,108 +144,101 @@ async def store_message_and_update_context(
         db: Database session (creates own if None).
         redis_client: Optional Redis client for cache invalidation.
     """
-    conversation_id = uuid.UUID(context.conversation_id) if context.conversation_id else None
-    logger.info(
-        "BACKGROUND MESSAGE WRITER TRIGGERED conversation_id=%s payload.last_input_text=%s",
-        conversation_id,
-        user_message,
-    )
-
-    if not conversation_id:
-        logger.warning("No conversation_id in context, skipping storage")
-        return
-
     try:
         async with async_session_factory() as session:
-            logger.info("MESSAGE INSERT START conversation_id=%s", conversation_id)
+            conversation_id = uuid.UUID(context.conversation_id) if context.conversation_id else None
+            if not conversation_id:
+                logger.warning("No conversation_id in context, skipping storage")
+                return
+
             now = datetime.now(timezone.utc)
 
-            result = await session.execute(
-                select(Conversation).where(
-                    Conversation.id == conversation_id,
-                    Conversation.org_id == uuid.UUID(context.org_id),
-                )
-            )
-            conversation = result.scalar_one_or_none()
-            if conversation is None:
-                logger.warning(
-                    "Conversation not found for background writer conversation_id=%s org_id=%s",
-                    conversation_id,
-                    context.org_id,
-                )
-                return
-
-            subscriber_result = await session.execute(
-                select(Subscriber).where(
-                    Subscriber.org_id == uuid.UUID(context.org_id),
-                    Subscriber.manychat_subscriber_id == context.subscriber.subscriber_id,
-                )
-            )
-            subscriber = subscriber_result.scalar_one_or_none()
-            if subscriber is None:
-                logger.warning(
-                    "Subscriber not found for background writer conversation_id=%s manychat_subscriber_id=%s",
-                    conversation_id,
-                    context.subscriber.subscriber_id,
-                )
-                return
-
+            # ── Store user message ─────────────────────────────
             user_msg = Message(
-                conversation_id=conversation.id,
+                conversation_id=conversation_id,
                 sender=MessageSender.USER,
                 content=user_message,
             )
+            session.add(user_msg)
+
+            # ── Store AI message ───────────────────────────────
             ai_msg = Message(
-                conversation_id=conversation.id,
+                conversation_id=conversation_id,
                 sender=MessageSender.AI,
                 content=ai_response.response_text,
                 intent_signals=ai_response.intent_signals or None,
-                buyer_stage_at_time=(
-                    BuyerStage(ai_response.buyer_stage)
-                    if ai_response.buyer_stage in [stage.value for stage in BuyerStage]
-                    else None
-                ),
+                buyer_stage_at_time=BuyerStage(ai_response.buyer_stage) if ai_response.buyer_stage in [s.value for s in BuyerStage] else None,
                 compliance_flags=ai_response.compliance_flags or None,
                 ai_model=ai_response.model_used,
                 ai_response_time_ms=ai_response.response_time_ms,
                 ai_tokens_used=ai_response.tokens_used,
                 quick_replies=ai_response.suggested_quick_replies or None,
             )
-            session.add_all([user_msg, ai_msg])
-
-            conversation.message_count = (conversation.message_count or 0) + 2
-            conversation.last_activity_at = now
-            conversation.last_message_preview = ai_response.response_text[:250]
-            if ai_response.response_time_ms is not None:
-                conversation.ai_response_time_avg_ms = ai_response.response_time_ms
-
-            subscriber.last_message_at = now
-            subscriber.total_messages = (subscriber.total_messages or 0) + 2
-
-            if ai_response.buyer_stage in [stage.value for stage in BuyerStage]:
-                subscriber.buyer_stage = BuyerStage(ai_response.buyer_stage)
-
+            session.add(ai_msg)
             await session.flush()
-            await session.commit()
-            logger.info(
-                "MESSAGE COMMITTED SUCCESSFULLY conversation_id=%s user_message_length=%s ai_message_length=%s",
-                conversation_id,
-                len(user_message),
-                len(ai_response.response_text),
+
+            # ── Record AI usage events ─────────────────────────
+            org_uuid = uuid.UUID(context.org_id)
+            _record_usage_event(
+                session, org_uuid, conversation_id, ai_msg.id,
+                stage="classifier", usage=classifier_usage,
+            )
+            _record_usage_event(
+                session, org_uuid, conversation_id, ai_msg.id,
+                stage="response", usage=ai_response.usage,
             )
 
-            if redis_client:
+            # ── Update conversation ────────────────────────────
+            await session.execute(
+                update(Conversation)
+                .where(Conversation.id == conversation_id)
+                .values(
+                    message_count=Conversation.message_count + 2,
+                    last_activity_at=now,
+                    ai_response_time_avg_ms=ai_response.response_time_ms,
+                )
+            )
+
+            # ── Update subscriber ──────────────────────────────
+            sub_updates: dict = {
+                "last_message_at": now,
+                "total_messages": Subscriber.total_messages + 2,
+            }
+
+            # Update buyer stage if changed
+            if ai_response.buyer_stage and ai_response.buyer_stage in [s.value for s in BuyerStage]:
+                sub_updates["buyer_stage"] = BuyerStage(ai_response.buyer_stage)
+
+            # Append new intent signals to interests
+            if ai_response.intent_signals:
+                # We can't easily append to ARRAY in SQLAlchemy, so we'll
+                # handle this separately if needed
+                pass
+
+            # Find subscriber by manychat ID
+            sub_result = await session.execute(
+                select(Subscriber).where(
+                    Subscriber.org_id == uuid.UUID(context.org_id),
+                    Subscriber.manychat_subscriber_id == context.subscriber.subscriber_id,
+                )
+            )
+            subscriber = sub_result.scalar_one_or_none()
+            if subscriber:
+                for key, value in sub_updates.items():
+                    setattr(subscriber, key, value)
+
+            await session.commit()
+
+            # ── Invalidate context cache ───────────────────────
+            if redis_client and conversation_id:
                 cache_key = f"{_CONTEXT_CACHE_PREFIX}{conversation_id}"
                 try:
                     await redis_client.delete(cache_key)
                 except Exception:
-                    logger.debug(
-                        "Failed to invalidate context cache for conversation_id=%s",
-                        conversation_id,
-                        exc_info=True,
-                    )
+                    pass
 
-            new_count = conversation.message_count
+            # ── Trigger summarization every N turns ────────────
+            new_count = context.message_count + 2
             if new_count > 0 and new_count % (_SUMMARIZE_EVERY_N_TURNS * 2) == 0:
                 asyncio.create_task(
                     _trigger_summarization(
@@ -252,17 +249,45 @@ async def store_message_and_update_context(
                 )
 
             logger.debug(
-                "Stored messages for conversation %s (total: %s)",
-                conversation_id,
-                new_count,
+                f"Stored messages for conversation {conversation_id} "
+                f"(total: {new_count})"
             )
 
-    except Exception:
-        logger.exception(
-            "Failed to store messages/update context conversation_id=%s org_id=%s",
-            conversation_id,
-            context.org_id,
+    except Exception as e:
+        logger.error(f"Failed to store message/update context: {e}", exc_info=True)
+
+
+def _record_usage_event(
+    session: AsyncSession,
+    org_id: uuid.UUID,
+    conversation_id: uuid.UUID,
+    message_id: uuid.UUID,
+    stage: str,
+    usage: TokenUsage | None,
+) -> None:
+    if usage is None or not usage.model:
+        return
+    total = (
+        usage.input_tokens
+        + usage.output_tokens
+        + usage.cache_read_tokens
+        + usage.cache_creation_tokens
+    )
+    if total == 0:
+        return
+    session.add(
+        AIUsageEvent(
+            org_id=org_id,
+            conversation_id=conversation_id,
+            message_id=message_id,
+            stage=stage,
+            model=usage.model,
+            input_tokens=usage.input_tokens,
+            output_tokens=usage.output_tokens,
+            cache_read_tokens=usage.cache_read_tokens,
+            cache_creation_tokens=usage.cache_creation_tokens,
         )
+    )
 
 
 async def _get_or_create_subscriber(
@@ -287,18 +312,27 @@ async def _get_or_create_subscriber(
             subscriber.first_name = custom_fields["first_name"]
         if custom_fields.get("last_name") and not subscriber.last_name:
             subscriber.last_name = custom_fields["last_name"]
+        # Update contact info if available
+        if custom_fields.get("email") and not subscriber.email:
+            subscriber.email = custom_fields["email"]
+        if custom_fields.get("phone") and not subscriber.phone:
+            subscriber.phone = custom_fields["phone"]
         # Update attribution if available
         if custom_fields.get("ctwa_clid") and not subscriber.ctwa_clid:
             subscriber.ctwa_clid = custom_fields["ctwa_clid"]
         if custom_fields.get("ad_id") and not subscriber.ad_id:
             subscriber.ad_id = custom_fields["ad_id"]
+        if custom_fields.get("post_id") and not subscriber.post_id:
+            subscriber.post_id = custom_fields["post_id"]
         if custom_fields.get("ad_set_id") and not subscriber.ad_set_id:
             subscriber.ad_set_id = custom_fields["ad_set_id"]
         if custom_fields.get("campaign_id") and not subscriber.campaign_id:
             subscriber.campaign_id = custom_fields["campaign_id"]
-        # Auto-link to Attora-managed AdCampaign if not already linked
-        if not subscriber.attora_campaign_id:
-            await _link_subscriber_to_campaign(db, org_id, subscriber, custom_fields.get("campaign_id") or subscriber.campaign_id)
+        # Resolve post_id from cached ad creatives if still missing
+        if not subscriber.post_id and subscriber.ad_id:
+            cached = await _lookup_post_id_from_ad_id(db, org_id, subscriber.ad_id)
+            if cached:
+                subscriber.post_id = cached
         return subscriber
 
     # Parse channel
@@ -307,65 +341,49 @@ async def _get_or_create_subscriber(
     except ValueError:
         channel_enum = ChannelType.MESSENGER
 
+    ad_id = custom_fields.get("ad_id")
+    post_id = custom_fields.get("post_id")
+    if not post_id and ad_id:
+        post_id = await _lookup_post_id_from_ad_id(db, org_id, ad_id)
+
     subscriber = Subscriber(
         org_id=org_id,
         manychat_subscriber_id=manychat_subscriber_id,
         channel=channel_enum,
         first_name=custom_fields.get("first_name"),
         last_name=custom_fields.get("last_name"),
+        email=custom_fields.get("email"),
+        phone=custom_fields.get("phone"),
         buyer_stage=BuyerStage.AWARENESS,
         first_message_at=datetime.now(timezone.utc),
         ctwa_clid=custom_fields.get("ctwa_clid"),
-        ad_id=custom_fields.get("ad_id"),
+        ad_id=ad_id,
+        post_id=post_id,
         ad_set_id=custom_fields.get("ad_set_id"),
         campaign_id=custom_fields.get("campaign_id"),
     )
     db.add(subscriber)
-    await db.flush()
-    await _link_subscriber_to_campaign(db, org_id, subscriber, custom_fields.get("campaign_id"))
+    await db.flush()  # Get the ID assigned
     return subscriber
 
 
-async def _link_subscriber_to_campaign(
+async def _lookup_post_id_from_ad_id(
     db: AsyncSession,
     org_id: uuid.UUID,
-    subscriber: Subscriber,
-    meta_campaign_id: str | None,
-) -> None:
-    """
-    Look up the Attora-managed AdCampaign matching the subscriber's Meta campaign ID
-    and set attora_campaign_id on the subscriber. Logs a compliance warning if
-    the campaign_id is present but not registered as an Attora-managed campaign.
-    """
-    if not meta_campaign_id:
-        return
-
+    ad_id: str,
+) -> str | None:
+    """Return the cached post_id for an ad_id, or None if not yet synced."""
     result = await db.execute(
-        select(AdCampaign).where(
-            AdCampaign.org_id == org_id,
-            AdCampaign.meta_campaign_id == meta_campaign_id,
-            AdCampaign.is_attora_managed == True,  # noqa: E712
+        select(CampaignMetric.post_id)
+        .where(
+            CampaignMetric.org_id == org_id,
+            CampaignMetric.meta_ad_id == ad_id,
+            CampaignMetric.level == "ad",
+            CampaignMetric.post_id.isnot(None),
         )
+        .limit(1)
     )
-    campaign = result.scalar_one_or_none()
-
-    if campaign:
-        subscriber.attora_campaign_id = campaign.id
-        logger.info(
-            "Linked subscriber %s to Attora campaign '%s' (%s)",
-            subscriber.manychat_subscriber_id,
-            campaign.name,
-            campaign.id,
-        )
-    else:
-        # Compliance: lead came from a campaign Attora doesn't manage
-        logger.warning(
-            "COMPLIANCE: subscriber %s has Meta campaign_id=%s but no matching "
-            "Attora-managed campaign found for org %s — verify this lead should be contacted",
-            subscriber.manychat_subscriber_id,
-            meta_campaign_id,
-            org_id,
-        )
+    return result.scalar_one_or_none()
 
 
 async def _get_or_create_conversation(

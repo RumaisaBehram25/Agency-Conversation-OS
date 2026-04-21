@@ -42,6 +42,9 @@ export default function ProductTable({
               Conversion Value
             </th>
             <th className="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
+              Checkout URL
+            </th>
+            <th className="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
               Status
             </th>
             <th className="px-6 py-3 text-right text-xs font-medium uppercase tracking-wider text-gray-500">
@@ -65,6 +68,33 @@ export default function ProductTable({
               </td>
               <td className="whitespace-nowrap px-6 py-4 text-sm text-gray-900">
                 {formatCurrency(product.conversion_value)}
+              </td>
+              <td className="whitespace-nowrap px-6 py-4">
+                <span
+                  role="status"
+                  aria-label={
+                    product.has_checkout_url
+                      ? 'Checkout URL configured'
+                      : 'No checkout URL'
+                  }
+                  title={
+                    product.has_checkout_url
+                      ? 'Checkout URL configured'
+                      : 'No checkout URL'
+                  }
+                  className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium ${
+                    product.has_checkout_url
+                      ? 'bg-green-100 text-green-700'
+                      : 'bg-gray-100 text-gray-400'
+                  }`}
+                >
+                  <span
+                    className={`h-1.5 w-1.5 rounded-full ${
+                      product.has_checkout_url ? 'bg-green-500' : 'bg-gray-300'
+                    }`}
+                  />
+                  {product.has_checkout_url ? 'Set' : 'Not set'}
+                </span>
               </td>
               <td className="whitespace-nowrap px-6 py-4">
                 <button

@@ -34,6 +34,7 @@ export interface Product {
   price: number;
   conversion_value: number;
   is_active: boolean;
+  has_checkout_url: boolean;
   created_at: string;
   updated_at: string;
 }

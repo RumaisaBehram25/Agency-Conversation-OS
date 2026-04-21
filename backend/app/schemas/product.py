@@ -7,7 +7,7 @@ Request/response models for product CRUD endpoints.
 from datetime import datetime
 from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, computed_field
 
 
 class ProductCreate(BaseModel):
@@ -57,5 +57,10 @@ class ProductResponse(BaseModel):
     sort_order: int
     created_at: datetime
     updated_at: datetime
+
+    @computed_field  # type: ignore[misc]
+    @property
+    def has_checkout_url(self) -> bool:
+        return bool(self.checkout_url)
 
     model_config = {"from_attributes": True}

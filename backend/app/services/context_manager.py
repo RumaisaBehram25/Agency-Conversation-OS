@@ -24,6 +24,7 @@ from app.config import settings
 from app.database import async_session_factory
 from app.models.ai_usage_event import AIUsageEvent
 from app.models.base import BuyerStage, ChannelType, ConversationStatus, MessageSender
+from app.models.campaign import AdCampaign
 from app.models.campaign_metrics import CampaignMetric
 from app.models.conversation import Conversation
 from app.models.message import Message
@@ -333,6 +334,11 @@ async def _get_or_create_subscriber(
             cached = await _lookup_post_id_from_ad_id(db, org_id, subscriber.ad_id)
             if cached:
                 subscriber.post_id = cached
+        # Compliance: link subscriber to registered Attora campaign (or warn)
+        if subscriber.campaign_id and subscriber.attora_campaign_id is None:
+            subscriber.attora_campaign_id = await _resolve_attora_campaign_id(
+                db, org_id, subscriber.campaign_id, manychat_subscriber_id
+            )
         return subscriber
 
     # Parse channel
@@ -345,6 +351,13 @@ async def _get_or_create_subscriber(
     post_id = custom_fields.get("post_id")
     if not post_id and ad_id:
         post_id = await _lookup_post_id_from_ad_id(db, org_id, ad_id)
+
+    meta_campaign_id = custom_fields.get("campaign_id")
+    attora_campaign_id: uuid.UUID | None = None
+    if meta_campaign_id:
+        attora_campaign_id = await _resolve_attora_campaign_id(
+            db, org_id, meta_campaign_id, manychat_subscriber_id
+        )
 
     subscriber = Subscriber(
         org_id=org_id,
@@ -360,11 +373,45 @@ async def _get_or_create_subscriber(
         ad_id=ad_id,
         post_id=post_id,
         ad_set_id=custom_fields.get("ad_set_id"),
-        campaign_id=custom_fields.get("campaign_id"),
+        campaign_id=meta_campaign_id,
+        attora_campaign_id=attora_campaign_id,
     )
     db.add(subscriber)
     await db.flush()  # Get the ID assigned
     return subscriber
+
+
+async def _resolve_attora_campaign_id(
+    db: AsyncSession,
+    org_id: uuid.UUID,
+    meta_campaign_id: str,
+    subscriber_manychat_id: str,
+) -> uuid.UUID | None:
+    """
+    Look up a registered Attora-managed AdCampaign for the given meta_campaign_id.
+
+    Returns the AdCampaign.id when found. When no active Attora-managed campaign
+    matches, logs a COMPLIANCE warning so ops can spot leads coming in via campaigns
+    that are NOT authorized for Attora outreach.
+    """
+    result = await db.execute(
+        select(AdCampaign.id).where(
+            AdCampaign.org_id == org_id,
+            AdCampaign.meta_campaign_id == meta_campaign_id,
+            AdCampaign.is_attora_managed.is_(True),
+            AdCampaign.is_active.is_(True),
+        )
+    )
+    campaign_id = result.scalar_one_or_none()
+    if campaign_id is None:
+        logger.warning(
+            "COMPLIANCE: subscriber=%s (org=%s) arrived via unregistered "
+            "meta_campaign_id=%s — not an Attora-managed campaign",
+            subscriber_manychat_id,
+            org_id,
+            meta_campaign_id,
+        )
+    return campaign_id
 
 
 async def _lookup_post_id_from_ad_id(

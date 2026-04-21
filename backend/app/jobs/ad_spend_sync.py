@@ -28,6 +28,7 @@ from app.integrations.meta.marketing_api import (
 )
 from app.jobs.olap_exports import export_campaign_facts_to_olap
 from app.models.analytics import DailyAnalytics
+from app.models.campaign import AdCampaign
 from app.models.campaign_metrics import CampaignBreakdown, CampaignMetric
 from app.models.organization import Organization
 from app.models.subscriber import Subscriber
@@ -166,6 +167,21 @@ async def sync_ad_spend(
         if not granular:
             continue
 
+        # Restrict ingestion to Attora-managed campaigns. If the org hasn't
+        # registered any, skip granular ingest entirely — we do not want
+        # metrics for campaigns we aren't authorized to act on.
+        attora_campaign_ids = await _load_attora_meta_campaign_ids(db, org.id)
+        if not attora_campaign_ids:
+            logger.info(
+                "Granular sync: org %s has no Attora-managed campaigns registered; "
+                "skipping campaign/adset/ad/breakdown ingest",
+                org.id,
+            )
+            continue
+
+        def _is_tracked(entry: dict) -> bool:
+            return entry.get("meta_campaign_id") in attora_campaign_ids
+
         # Campaign-level insights
         campaign_data = await fetch_campaign_insights(
             ad_account_id=org.meta_ad_account_id,
@@ -174,6 +190,8 @@ async def sync_ad_spend(
             date_to=date_to,
         )
         for entry in campaign_data:
+            if not _is_tracked(entry):
+                continue
             total_campaigns_synced += await _upsert_campaign_metric(
                 db, org.id, entry, level="campaign",
             )
@@ -186,6 +204,8 @@ async def sync_ad_spend(
             date_to=date_to,
         )
         for entry in adset_data:
+            if not _is_tracked(entry):
+                continue
             total_adsets_synced += await _upsert_campaign_metric(
                 db, org.id, entry, level="adset",
             )
@@ -198,6 +218,8 @@ async def sync_ad_spend(
             date_to=date_to,
         )
         for entry in ad_data:
+            if not _is_tracked(entry):
+                continue
             total_ads_synced += await _upsert_campaign_metric(
                 db, org.id, entry, level="ad",
             )
@@ -212,6 +234,8 @@ async def sync_ad_spend(
                 breakdown_type=breakdown_type,
             )
             for entry in breakdown_data:
+                if not _is_tracked(entry):
+                    continue
                 total_breakdowns_synced += await _upsert_campaign_breakdown(
                     db, org.id, entry,
                 )
@@ -282,6 +306,22 @@ async def sync_ad_spend(
 # ---------------------------------------------------------------------------
 # Upsert helpers
 # ---------------------------------------------------------------------------
+
+
+async def _load_attora_meta_campaign_ids(
+    db: AsyncSession, org_id: uuid.UUID
+) -> set[str]:
+    """Return the set of meta_campaign_ids this org has flagged as Attora-managed."""
+    result = await db.execute(
+        select(AdCampaign.meta_campaign_id).where(
+            AdCampaign.org_id == org_id,
+            AdCampaign.is_attora_managed.is_(True),
+            AdCampaign.is_active.is_(True),
+            AdCampaign.meta_campaign_id.isnot(None),
+        )
+    )
+    return {row for row, in result.all() if row}
+
 
 async def _upsert_campaign_metric(
     db: AsyncSession,

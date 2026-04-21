@@ -1,7 +1,7 @@
 """Add ad_campaigns, campaign_utms tables and subscriber attora_campaign_id
 
-Revision ID: 003
-Revises: 002
+Revision ID: 003_add_campaigns_and_utms
+Revises: 002_add_last_message_preview
 Create Date: 2026-04-20
 """
 
@@ -10,8 +10,8 @@ from typing import Sequence, Union
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "003"
-down_revision: Union[str, None] = "002"
+revision: str = "003_add_campaigns_and_utms"
+down_revision: Union[str, None] = "002_add_last_message_preview"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

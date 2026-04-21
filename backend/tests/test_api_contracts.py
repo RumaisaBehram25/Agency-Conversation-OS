@@ -304,10 +304,10 @@ def test_campaign_contracts(client):
 
     app.dependency_overrides[get_db] = override_db
 
-    assert test_client.get("/api/campaigns").json()[0]["meta_campaign_id"] == "cmp_1"
-    assert test_client.get("/api/campaigns/cmp_1/adsets").json()[0]["meta_adset_id"] == "adset_1"
-    assert test_client.get("/api/campaigns/cmp_1/adsets/adset_1/ads").json()[0]["meta_ad_id"] == "ad_1"
-    assert test_client.get("/api/campaigns/cmp_1/breakdowns?type=age_gender").json()[0]["breakdown_key"] == "25-34_female"
+    assert test_client.get("/api/campaign-metrics").json()[0]["meta_campaign_id"] == "cmp_1"
+    assert test_client.get("/api/campaign-metrics/cmp_1/adsets").json()[0]["meta_adset_id"] == "adset_1"
+    assert test_client.get("/api/campaign-metrics/cmp_1/adsets/adset_1/ads").json()[0]["meta_ad_id"] == "ad_1"
+    assert test_client.get("/api/campaign-metrics/cmp_1/breakdowns?type=age_gender").json()[0]["breakdown_key"] == "25-34_female"
 
     app.dependency_overrides.pop(get_db, None)
 

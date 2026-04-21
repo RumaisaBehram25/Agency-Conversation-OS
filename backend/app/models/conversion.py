@@ -62,10 +62,26 @@ class ConversionEvent(Base, TimestampMixin, OrgScopedMixin):
     meta_ad_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     meta_campaign_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
+    # ── Attora Campaign + UTM Attribution ────────────────────
+    # Populated from the landing-page UTM params so we can answer
+    # "which registered Attora campaign drove this conversion?".
+    attora_campaign_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid,
+        ForeignKey("ad_campaigns.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    utm_source: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    utm_medium: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    utm_campaign: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    utm_content: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    attora_sub: Mapped[str | None] = mapped_column(String(255), nullable=True)
+
     # ── Relationships ────────────────────────────────────────
     organization = relationship("Organization", back_populates="conversion_events")
     subscriber = relationship("Subscriber", back_populates="conversion_events")
     conversation = relationship("Conversation", back_populates="conversion_events")
+    attora_campaign = relationship("AdCampaign")
 
     def __repr__(self) -> str:
         return f"<ConversionEvent(id={self.id}, type={self.conversion_type}, value={self.value})>"

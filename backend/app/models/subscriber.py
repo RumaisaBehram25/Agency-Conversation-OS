@@ -12,6 +12,7 @@ from sqlalchemy import (
     Boolean,
     DateTime,
     Enum,
+    ForeignKey,
     Integer,
     Numeric,
     String,
@@ -52,6 +53,17 @@ class Subscriber(Base, TimestampMixin, OrgScopedMixin):
     ad_set_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     campaign_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
+    # ── Attora Campaign Link (compliance) ────────────────────
+    # Set only when the subscriber's meta campaign_id matches a registered
+    # AdCampaign for this org. A NULL value means the lead arrived via a
+    # campaign that is NOT flagged as Attora-managed → do not reach out.
+    attora_campaign_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid,
+        ForeignKey("ad_campaigns.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+
     # ── AI Context ───────────────────────────────────────────
     buyer_stage: Mapped[BuyerStage] = mapped_column(
         Enum(BuyerStage, name="buyer_stage", values_callable=lambda x: [e.value for e in x]),
@@ -78,6 +90,7 @@ class Subscriber(Base, TimestampMixin, OrgScopedMixin):
     organization = relationship("Organization", back_populates="subscribers")
     conversations = relationship("Conversation", back_populates="subscriber", cascade="all, delete-orphan")
     conversion_events = relationship("ConversionEvent", back_populates="subscriber", cascade="all, delete-orphan")
+    attora_campaign = relationship("AdCampaign", back_populates="subscribers")
 
     __table_args__ = (
         UniqueConstraint("org_id", "manychat_subscriber_id", name="uq_subscribers_org_manychat"),

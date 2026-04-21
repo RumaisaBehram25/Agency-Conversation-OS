@@ -25,13 +25,13 @@ _GRAPH_API_BASE = f"https://graph.facebook.com/{_GRAPH_API_VERSION}"
 _DEFAULT_TIMEOUT = 10.0  # seconds
 
 # Supported event names
-SUPPORTED_EVENTS = {"Lead", "Purchase", "InitiateCheckout"}
+SUPPORTED_EVENTS = {"LeadSubmitted", "Purchase", "InitiateCheckout"}
 
 # Channel to messaging_channel mapping
 _CHANNEL_MAP = {
     "whatsapp": "whatsapp",
     "messenger": "messenger",
-    "instagram": "instagram_direct",
+    "instagram": "instagram",
 }
 
 
@@ -160,7 +160,7 @@ async def fire_lead_event(
     return await fire_conversion_event(
         pixel_id=pixel_id,
         access_token=access_token,
-        event_name="Lead",
+        event_name="LeadSubmitted",
         subscriber_id=subscriber_id,
         channel=channel,
         ctwa_clid=ctwa_clid,

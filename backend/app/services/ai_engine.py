@@ -22,9 +22,13 @@ import logging
 import time
 import uuid
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
+from app.models.campaign import AdCampaign
 from app.schemas.ai_engine import AIResponse, IntentType
+from app.schemas.campaign import build_utm_url
 from app.services.buyer_stage import classify_buyer_stage
 from app.services.classifier import classify_message
 from app.services.config_loader import load_org_config
@@ -41,6 +45,55 @@ logger = logging.getLogger(__name__)
 
 # Total pipeline time budget
 _TOTAL_TIMEOUT_SECONDS = 10.0
+
+
+async def _load_subscriber_tagged_urls(
+    db: AsyncSession | None,
+    org_id: uuid.UUID,
+    attora_campaign_id: str | None,
+    subscriber_id: str,
+) -> dict[str, str]:
+    """
+    Look up the campaign's UTM URLs and stamp attora_sub=<subscriber_id> on each.
+
+    Returns a dict with keys "product_page", "checkout", "success" — only entries
+    with a configured URL are included. Non-fatal on any failure; returns {}.
+    """
+    if db is None or not attora_campaign_id:
+        return {}
+    try:
+        campaign_uuid = uuid.UUID(attora_campaign_id)
+    except (ValueError, TypeError):
+        return {}
+
+    try:
+        result = await db.execute(
+            select(AdCampaign)
+            .where(AdCampaign.id == campaign_uuid, AdCampaign.org_id == org_id)
+            .options(selectinload(AdCampaign.utm))
+        )
+        campaign = result.scalar_one_or_none()
+        if campaign is None or campaign.utm is None:
+            return {}
+
+        extra = {"attora_sub": subscriber_id}
+        tagged: dict[str, str] = {}
+        if campaign.utm.product_page_utm_url:
+            tagged["product_page"] = build_utm_url(
+                campaign.utm.product_page_utm_url, extra
+            )
+        if campaign.utm.checkout_utm_url:
+            tagged["checkout"] = build_utm_url(campaign.utm.checkout_utm_url, extra)
+        if campaign.utm.success_utm_url:
+            tagged["success"] = build_utm_url(campaign.utm.success_utm_url, extra)
+        return tagged
+    except Exception as e:
+        logger.warning(
+            "Failed to load per-subscriber UTM URLs for campaign %s: %s",
+            attora_campaign_id,
+            e,
+        )
+        return {}
 
 
 async def process_message(
@@ -129,6 +182,15 @@ async def _run_pipeline(
     )
     logger.debug(
         f"Step 2 (context_load): {int((time.monotonic() - step_start) * 1000)}ms"
+    )
+
+    # ── Step 2.1: Stamp per-subscriber UTM URLs ────────────────
+    # So the AI can quote an attribution link scoped to THIS lead.
+    context.subscriber_tagged_urls = await _load_subscriber_tagged_urls(
+        db=db,
+        org_id=org_id,
+        attora_campaign_id=context.subscriber.attora_campaign_id,
+        subscriber_id=subscriber_id,
     )
 
     # ── Step 2.5: Retrieve knowledge (<1s via Haiku) ──────────

@@ -112,6 +112,7 @@ async def load_conversation_context(
         ctwa_clid=custom_fields.get("ctwa_clid") or subscriber.ctwa_clid,
         ad_id=custom_fields.get("ad_id") or subscriber.ad_id,
         post_id=custom_fields.get("post_id") or subscriber.post_id,
+        attora_campaign_id=str(subscriber.attora_campaign_id) if subscriber.attora_campaign_id else None,
     )
 
     return ConversationContext(

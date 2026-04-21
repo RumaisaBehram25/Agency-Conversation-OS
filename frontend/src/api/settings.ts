@@ -10,3 +10,21 @@ export async function updateSettings(data: SettingsUpdate): Promise<SettingsResp
   const response = await client.put<SettingsResponse>('/settings', data);
   return response.data;
 }
+
+export interface MetaSyncNowResponse {
+  started: boolean;
+  days_back: number;
+  granular: boolean;
+  message: string;
+}
+
+export async function syncMetaNow(
+  days_back = 7,
+  granular = true,
+): Promise<MetaSyncNowResponse> {
+  const response = await client.post<MetaSyncNowResponse>(
+    '/settings/meta/sync-now',
+    { days_back, granular },
+  );
+  return response.data;
+}

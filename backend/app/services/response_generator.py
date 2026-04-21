@@ -56,8 +56,12 @@ async def generate_response(
     """
     start_time = time.monotonic()
 
-    # Build prompts
-    system_blocks = build_system_prompt(org_config)
+    # Build prompts — pass per-subscriber attribution URLs so the AI
+    # quotes attora_sub-tagged links instead of the product's static URL.
+    system_blocks = build_system_prompt(
+        org_config,
+        subscriber_urls=context.subscriber_tagged_urls,
+    )
     user_message = build_user_message(context)
 
     try:

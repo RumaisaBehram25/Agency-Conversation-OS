@@ -191,6 +191,35 @@ def _ensure_act_prefix(ad_account_id: str) -> str:
     return ad_account_id
 
 
+async def fetch_ad_account_overview(
+    ad_account_id: str,
+    access_token: str,
+) -> tuple[dict[str, Any] | None, str | None]:
+    """
+    GET the ad account node (name, status, currency).
+
+    Used to verify the token can access the account before relying on insights.
+    """
+    act = _ensure_act_prefix(ad_account_id)
+    url = f"{_GRAPH_API_BASE}/{act}"
+    params = {
+        "access_token": access_token,
+        "fields": "name,account_id,account_status,currency",
+    }
+    try:
+        async with httpx.AsyncClient(timeout=_DEFAULT_TIMEOUT) as client:
+            response = await client.get(url, params=params)
+            if response.status_code >= 400:
+                return None, response.text[:1500]
+            return response.json(), None
+    except httpx.TimeoutException:
+        return None, "Meta Graph API request timed out"
+    except httpx.HTTPError as e:
+        return None, str(e)[:1500]
+    except Exception as e:
+        return None, str(e)[:1500]
+
+
 def _build_time_range(date_from: date, date_to: date) -> str:
     return f'{{"since":"{date_from.isoformat()}","until":"{date_to.isoformat()}"}}'
 

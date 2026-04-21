@@ -92,6 +92,7 @@ class SubscriberContext(BaseModel):
     ctwa_clid: str | None = None
     ad_id: str | None = None
     post_id: str | None = None
+    attora_campaign_id: str | None = None
 
 
 class ConversationContext(BaseModel):
@@ -104,6 +105,9 @@ class ConversationContext(BaseModel):
     current_message: str
     message_count: int = 0
     retrieved_knowledge: list[str] = Field(default_factory=list)
+    # URLs pre-stamped with attora_sub=<subscriber_id> so the AI can quote
+    # per-lead attribution links. Keys: "product_page", "checkout", "success".
+    subscriber_tagged_urls: dict[str, str] = Field(default_factory=dict)
 
 
 # ── Client Configuration (cached) ────────────────────────────

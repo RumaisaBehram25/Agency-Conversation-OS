@@ -46,6 +46,11 @@ export default function CampaignsPage() {
   const [utmForm, setUtmForm] = useState<UtmForm>(EMPTY_UTM);
   const [utmSaving, setUtmSaving] = useState(false);
 
+  const [viewUtmTarget, setViewUtmTarget] = useState<AdCampaign | null>(null);
+
+  const [pageSize, setPageSize] = useState(25);
+  const [currentPage, setCurrentPage] = useState(1);
+
   const load = useCallback(async () => {
     setLoading(true);
     setError('');
@@ -62,6 +67,19 @@ export default function CampaignsPage() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  // Keep currentPage in bounds when the list shrinks (e.g., after unregister)
+  // or the user changes page size.
+  const totalPages = Math.max(1, Math.ceil(campaigns.length / pageSize));
+  useEffect(() => {
+    if (currentPage > totalPages) {
+      setCurrentPage(totalPages);
+    }
+  }, [currentPage, totalPages]);
+
+  const pageStart = (currentPage - 1) * pageSize;
+  const pageEnd = Math.min(pageStart + pageSize, campaigns.length);
+  const paginatedCampaigns = campaigns.slice(pageStart, pageEnd);
 
   async function handleCreate(event: React.FormEvent) {
     event.preventDefault();
@@ -224,7 +242,9 @@ export default function CampaignsPage() {
                 <th className="px-4 py-3 font-medium">Meta ID</th>
                 <th className="px-4 py-3 font-medium">Managed</th>
                 <th className="px-4 py-3 font-medium">UTM set</th>
-                <th className="px-4 py-3 font-medium text-right">Actions</th>
+                <th className="min-w-[11rem] whitespace-nowrap px-4 py-3 text-right font-medium">
+                  Actions
+                </th>
               </tr>
             </thead>
             <tbody>
@@ -235,7 +255,7 @@ export default function CampaignsPage() {
                   </td>
                 </tr>
               ) : (
-                campaigns.map((c) => (
+                paginatedCampaigns.map((c) => (
                   <tr key={c.id} className="border-t border-gray-100 align-top">
                     <td className="px-4 py-3">
                       <div className="font-medium text-gray-900">{c.name}</div>
@@ -257,74 +277,228 @@ export default function CampaignsPage() {
                         {c.is_attora_managed && c.is_active ? 'Active' : 'Paused'}
                       </span>
                     </td>
-                    <td className="px-4 py-3 text-xs text-gray-700">
+                    <td className="px-4 py-3">
                       {c.utm ? (
-                        <div className="space-y-1">
-                          {c.utm.product_page_utm_url && (
-                            <div>
-                              <span className="text-gray-500">product:</span>{' '}
-                              <a
-                                className="break-all text-blue-600 hover:underline"
-                                href={c.utm.product_page_utm_url}
-                                target="_blank"
-                                rel="noreferrer"
-                              >
-                                {c.utm.product_page_utm_url}
-                              </a>
-                            </div>
-                          )}
-                          {c.utm.checkout_utm_url && (
-                            <div>
-                              <span className="text-gray-500">checkout:</span>{' '}
-                              <a
-                                className="break-all text-blue-600 hover:underline"
-                                href={c.utm.checkout_utm_url}
-                                target="_blank"
-                                rel="noreferrer"
-                              >
-                                {c.utm.checkout_utm_url}
-                              </a>
-                            </div>
-                          )}
-                          {c.utm.success_utm_url && (
-                            <div>
-                              <span className="text-gray-500">success:</span>{' '}
-                              <a
-                                className="break-all text-blue-600 hover:underline"
-                                href={c.utm.success_utm_url}
-                                target="_blank"
-                                rel="noreferrer"
-                              >
-                                {c.utm.success_utm_url}
-                              </a>
-                            </div>
-                          )}
-                        </div>
+                        <span className="rounded-full bg-blue-100 px-2 py-0.5 text-xs font-medium text-blue-800">
+                          Set
+                        </span>
                       ) : (
-                        <span className="text-gray-400">None</span>
+                        <span className="rounded-full bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-500">
+                          None
+                        </span>
                       )}
                     </td>
-                    <td className="px-4 py-3 text-right">
-                      <button
-                        type="button"
-                        onClick={() => openUtmEditor(c)}
-                        className="mr-2 rounded-md border border-gray-300 px-3 py-1 text-xs font-medium text-gray-700 hover:bg-gray-50"
-                      >
-                        {c.utm ? 'Edit UTMs' : 'Generate UTMs'}
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => void handleDelete(c.id)}
-                        className="rounded-md border border-red-200 px-3 py-1 text-xs font-medium text-red-700 hover:bg-red-50"
-                      >
-                        Unregister
-                      </button>
+                    <td className="min-w-[13rem] align-top px-4 py-3">
+                      <div className="flex items-start justify-end gap-2">
+                        <button
+                          type="button"
+                          onClick={() => openUtmEditor(c)}
+                          className="whitespace-nowrap rounded-md border border-gray-300 px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50"
+                        >
+                          {c.utm ? 'Edit UTMs' : 'Generate UTMs'}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setViewUtmTarget(c)}
+                          disabled={!c.utm}
+                          title={c.utm ? 'View UTM URLs' : 'No UTMs to view'}
+                          aria-label="View UTM URLs"
+                          className="rounded-md border border-gray-300 p-1.5 text-gray-600 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-40"
+                        >
+                          <svg
+                            xmlns="http://www.w3.org/2000/svg"
+                            fill="none"
+                            viewBox="0 0 24 24"
+                            strokeWidth="1.5"
+                            stroke="currentColor"
+                            className="h-4 w-4"
+                          >
+                            <path
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                              d="M2.036 12.322a1.012 1.012 0 010-.639C3.423 7.51 7.36 4.5 12 4.5c4.638 0 8.573 3.007 9.963 7.178.07.207.07.431 0 .639C20.577 16.49 16.64 19.5 12 19.5c-4.638 0-8.573-3.007-9.963-7.178z"
+                            />
+                            <path
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                              d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"
+                            />
+                          </svg>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => void handleDelete(c.id)}
+                          className="whitespace-nowrap rounded-md border border-red-200 px-3 py-1.5 text-xs font-medium text-red-700 hover:bg-red-50"
+                        >
+                          Unregister
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 ))
               )}
             </tbody>
           </table>
+
+          {campaigns.length > 0 && (
+            <div className="flex flex-wrap items-center justify-between gap-3 border-t border-gray-100 bg-gray-50 px-4 py-3 text-sm text-gray-700">
+              <div className="flex items-center gap-2">
+                <span>Rows per page:</span>
+                <select
+                  value={pageSize}
+                  onChange={(e) => {
+                    setPageSize(Number(e.target.value));
+                    setCurrentPage(1);
+                  }}
+                  className="rounded-md border border-gray-300 bg-white px-2 py-1 text-xs"
+                >
+                  <option value={10}>10</option>
+                  <option value={25}>25</option>
+                  <option value={50}>50</option>
+                  <option value={100}>100</option>
+                </select>
+              </div>
+
+              <div className="text-xs text-gray-600">
+                Showing <span className="font-medium">{pageStart + 1}</span>–
+                <span className="font-medium">{pageEnd}</span> of{' '}
+                <span className="font-medium">{campaigns.length}</span>
+              </div>
+
+              <div className="flex items-center gap-1">
+                <button
+                  type="button"
+                  onClick={() => setCurrentPage(1)}
+                  disabled={currentPage === 1}
+                  className="rounded-md border border-gray-300 px-2 py-1 text-xs font-medium text-gray-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-40"
+                  aria-label="First page"
+                >
+                  «
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+                  disabled={currentPage === 1}
+                  className="rounded-md border border-gray-300 px-3 py-1 text-xs font-medium text-gray-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  Prev
+                </button>
+                <span className="px-2 text-xs tabular-nums text-gray-600">
+                  Page {currentPage} / {totalPages}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+                  disabled={currentPage === totalPages}
+                  className="rounded-md border border-gray-300 px-3 py-1 text-xs font-medium text-gray-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  Next
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setCurrentPage(totalPages)}
+                  disabled={currentPage === totalPages}
+                  className="rounded-md border border-gray-300 px-2 py-1 text-xs font-medium text-gray-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-40"
+                  aria-label="Last page"
+                >
+                  »
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {viewUtmTarget && viewUtmTarget.utm && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+          onClick={() => setViewUtmTarget(null)}
+        >
+          <div
+            className="w-full max-w-2xl space-y-4 rounded-xl bg-white p-6 shadow-xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <h2 className="text-lg font-semibold text-gray-900">UTM URLs</h2>
+                <p className="mt-0.5 text-sm text-gray-500">{viewUtmTarget.name}</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setViewUtmTarget(null)}
+                className="rounded-md p-1 text-gray-400 hover:bg-gray-100 hover:text-gray-600"
+                aria-label="Close"
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth="2" stroke="currentColor" className="h-5 w-5">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+
+            <div className="rounded-lg border border-gray-100 bg-gray-50 px-3 py-2 text-xs text-gray-600">
+              <div>
+                <span className="text-gray-500">utm_source:</span>{' '}
+                <span className="font-mono text-gray-900">{viewUtmTarget.utm.utm_source}</span>
+              </div>
+              <div>
+                <span className="text-gray-500">utm_medium:</span>{' '}
+                <span className="font-mono text-gray-900">{viewUtmTarget.utm.utm_medium}</span>
+              </div>
+              <div>
+                <span className="text-gray-500">utm_campaign:</span>{' '}
+                <span className="font-mono text-gray-900">{viewUtmTarget.utm.utm_campaign}</span>
+              </div>
+            </div>
+
+            {([
+              ['Product page', viewUtmTarget.utm.product_page_url, viewUtmTarget.utm.product_page_utm_url],
+              ['Checkout', viewUtmTarget.utm.checkout_url, viewUtmTarget.utm.checkout_utm_url],
+              ['Purchase success', viewUtmTarget.utm.success_url, viewUtmTarget.utm.success_utm_url],
+            ] as const)
+              .filter(([, , generated]) => !!generated)
+              .map(([label, base, generated]) => (
+                <div key={label} className="space-y-1 rounded-lg border border-gray-200 p-3">
+                  <div className="text-xs font-semibold uppercase tracking-wider text-gray-500">
+                    {label}
+                  </div>
+                  {base && (
+                    <div className="text-xs text-gray-500">
+                      <span className="font-medium">Base:</span>{' '}
+                      <span className="font-mono break-all">{base}</span>
+                    </div>
+                  )}
+                  <div className="flex items-start gap-2">
+                    <a
+                      href={generated ?? undefined}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="flex-1 break-all rounded bg-blue-50 px-2 py-1.5 font-mono text-xs text-blue-700 hover:underline"
+                    >
+                      {generated}
+                    </a>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (generated) void navigator.clipboard.writeText(generated);
+                      }}
+                      className="shrink-0 rounded-md border border-gray-300 px-2 py-1 text-xs font-medium text-gray-700 hover:bg-gray-50"
+                    >
+                      Copy
+                    </button>
+                  </div>
+                </div>
+              ))}
+
+            <div className="flex justify-end pt-1">
+              <button
+                type="button"
+                onClick={() => setViewUtmTarget(null)}
+                className="rounded-md border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
+              >
+                Close
+              </button>
+            </div>
+          </div>
         </div>
       )}
 

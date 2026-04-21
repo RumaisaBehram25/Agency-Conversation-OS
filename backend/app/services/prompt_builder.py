@@ -42,6 +42,7 @@ RESPONSE STYLE:
 
 def build_system_prompt(
     org_config: OrgConfig,
+    subscriber_urls: dict[str, str] | None = None,
 ) -> list[dict]:
     """
     Build the system prompt as a list of content blocks for Claude.
@@ -52,10 +53,16 @@ def build_system_prompt(
 
     Args:
         org_config: Cached organization configuration.
+        subscriber_urls: Optional per-subscriber attribution URLs (already
+            stamped with attora_sub). Keys: "product_page", "checkout",
+            "success". When a matching key is present, it REPLACES the
+            product's static URL in the catalog so the AI quotes the
+            attribution-tagged version.
 
     Returns:
         List of content block dicts for Claude's system parameter.
     """
+    subscriber_urls = subscriber_urls or {}
     sections: list[str] = []
 
     # Section 1: Base Persona
@@ -77,6 +84,9 @@ def build_system_prompt(
     if ai.product_knowledge:
         product_knowledge_parts.append(ai.product_knowledge)
 
+    tagged_checkout = subscriber_urls.get("checkout")
+    tagged_product_page = subscriber_urls.get("product_page")
+
     if org_config.products:
         product_knowledge_parts.append("\n### PRODUCT CATALOG:")
         for p in org_config.products:
@@ -85,11 +95,25 @@ def build_system_prompt(
                 entry += f" — {p.currency} {p.price:.2f}"
             if p.description:
                 entry += f"\n  {p.description}"
-            if p.checkout_url:
-                entry += f"\n  Checkout: {p.checkout_url}"
+            # Prefer the per-subscriber attribution-tagged URL so the AI
+            # quotes a link that attributes back to this specific lead.
+            checkout_url = tagged_checkout or p.checkout_url
+            if checkout_url:
+                entry += f"\n  Checkout: {checkout_url}"
+            if tagged_product_page:
+                entry += f"\n  Product page: {tagged_product_page}"
             if p.eligibility_criteria:
                 entry += f"\n  Eligibility: {json.dumps(p.eligibility_criteria)}"
             product_knowledge_parts.append(entry)
+
+    if subscriber_urls:
+        product_knowledge_parts.append(
+            "\n### ATTRIBUTION LINKS:\n"
+            "When you share a checkout or product URL with this lead, ALWAYS use "
+            "the exact URL provided above (including the `attora_sub` query "
+            "parameter). These URLs attribute the conversion back to this "
+            "specific subscriber — do not shorten, modify, or strip query params."
+        )
 
     if product_knowledge_parts:
         sections.append(

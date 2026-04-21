@@ -1,6 +1,7 @@
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import { getAnalytics, getROI, getAIPerformance, getExportUrl } from '../api/analytics';
 import { getCampaigns } from '../api/campaigns';
+import { syncMetaNow } from '../api/settings';
 import type { AnalyticsResponse, ROIResponse, AIPerformanceResponse, CampaignSummary } from '../types';
 import AnalyticsMetricCards from '../components/analytics/MetricCards';
 import FunnelChart from '../components/analytics/FunnelChart';
@@ -36,6 +37,14 @@ export default function AnalyticsPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
+  const [syncing, setSyncing] = useState(false);
+  const [syncStatus, setSyncStatus] = useState<string | null>(null);
+  const [syncProgress, setSyncProgress] = useState(0);
+  const syncTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const syncIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const SYNC_ETA_MS = 60_000;
+
   // Fetch campaign list when date range changes
   useEffect(() => {
     getCampaigns({ date_from: dateFrom, date_to: dateTo })
@@ -65,6 +74,61 @@ export default function AnalyticsPage() {
   useEffect(() => {
     load();
   }, [load]);
+
+  useEffect(() => {
+    return () => {
+      if (syncTimeoutRef.current) clearTimeout(syncTimeoutRef.current);
+      if (syncIntervalRef.current) clearInterval(syncIntervalRef.current);
+    };
+  }, []);
+
+  async function handleSyncNow() {
+    if (syncing) return;
+    setSyncing(true);
+    setSyncStatus(null);
+    setSyncProgress(0);
+    try {
+      const res = await syncMetaNow(30, true);
+      setSyncStatus(res.message);
+
+      const startedAt = Date.now();
+      if (syncIntervalRef.current) clearInterval(syncIntervalRef.current);
+      syncIntervalRef.current = setInterval(() => {
+        const elapsed = Date.now() - startedAt;
+        // Cap display at 95% until the real completion tick fires
+        const pct = Math.min(95, Math.round((elapsed / SYNC_ETA_MS) * 100));
+        setSyncProgress(pct);
+      }, 500);
+
+      if (syncTimeoutRef.current) clearTimeout(syncTimeoutRef.current);
+      syncTimeoutRef.current = setTimeout(() => {
+        if (syncIntervalRef.current) {
+          clearInterval(syncIntervalRef.current);
+          syncIntervalRef.current = null;
+        }
+        setSyncProgress(100);
+        setSyncStatus('Sync complete — refreshing charts…');
+        load();
+        setTimeout(() => {
+          setSyncing(false);
+          setSyncStatus(null);
+          setSyncProgress(0);
+        }, 2000);
+      }, SYNC_ETA_MS);
+    } catch (err: unknown) {
+      setSyncing(false);
+      setSyncProgress(0);
+      if (syncIntervalRef.current) {
+        clearInterval(syncIntervalRef.current);
+        syncIntervalRef.current = null;
+      }
+      const detail =
+        typeof err === 'object' && err !== null && 'response' in err
+          ? ((err as { response?: { data?: { detail?: string } } }).response?.data?.detail ?? null)
+          : null;
+      setSyncStatus(detail ?? 'Failed to start Meta sync. Check Settings → Meta credentials.');
+    }
+  }
 
   function handleExport() {
     const token = localStorage.getItem('access_token');
@@ -121,6 +185,19 @@ export default function AnalyticsPage() {
               setDateTo(to);
             }}
           />
+          <Button
+            variant="primary"
+            onClick={handleSyncNow}
+            loading={syncing}
+            disabled={syncing}
+          >
+            {!syncing && (
+              <svg className="mr-2 h-4 w-4" fill="none" viewBox="0 0 24 24" strokeWidth="1.5" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182m0-4.991v4.99" />
+              </svg>
+            )}
+            {syncing ? 'Syncing Meta…' : 'Sync Meta Data'}
+          </Button>
           <Button variant="secondary" onClick={handleExport}>
             <svg className="mr-2 h-4 w-4" fill="none" viewBox="0 0 24 24" strokeWidth="1.5" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3" />
@@ -129,6 +206,27 @@ export default function AnalyticsPage() {
           </Button>
         </div>
       </div>
+
+      {syncStatus && (
+        <div className="mb-4 rounded-lg border border-primary-200 bg-primary-50 px-4 py-3 text-sm text-primary-800">
+          <div className="flex items-center justify-between gap-4">
+            <span>{syncStatus}</span>
+            {syncing && (
+              <span className="text-xs font-medium text-primary-700 tabular-nums">
+                {syncProgress}%
+              </span>
+            )}
+          </div>
+          {syncing && (
+            <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-primary-100">
+              <div
+                className="h-full rounded-full bg-primary-600 transition-all duration-500 ease-linear"
+                style={{ width: `${syncProgress}%` }}
+              />
+            </div>
+          )}
+        </div>
+      )}
 
       {loading ? (
         <LoadingSpinner className="mt-12" size="lg" />

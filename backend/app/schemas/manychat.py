@@ -21,6 +21,11 @@ class ManyChatCustomFields(BaseModel):
     ad_id: str | None = None
     ad_set_id: str | None = None
     campaign_id: str | None = None
+    # Optional first-touch UTMs (map from ManyChat / landing flow)
+    utm_source: str | None = None
+    utm_medium: str | None = None
+    utm_campaign: str | None = None
+    utm_content: str | None = None
 
     class Config:
         extra = "allow"  # ManyChat may send additional custom fields

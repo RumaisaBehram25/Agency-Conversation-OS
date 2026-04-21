@@ -142,6 +142,10 @@ export interface SubscriberListItem {
   first_message_at: string | null;
   last_message_at: string | null;
   created_at: string;
+  utm_source?: string | null;
+  utm_medium?: string | null;
+  utm_campaign?: string | null;
+  utm_content?: string | null;
 }
 
 export interface SubscriberConversation {
@@ -171,6 +175,10 @@ export interface SubscriberDetail {
   first_message_at: string | null;
   last_message_at: string | null;
   total_messages: number;
+  utm_source?: string | null;
+  utm_medium?: string | null;
+  utm_campaign?: string | null;
+  utm_content?: string | null;
   created_at: string;
   updated_at: string;
   conversations: SubscriberConversation[];

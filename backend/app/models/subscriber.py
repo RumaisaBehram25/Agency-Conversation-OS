@@ -64,6 +64,12 @@ class Subscriber(Base, TimestampMixin, OrgScopedMixin):
         index=True,
     )
 
+    # First-touch UTM params from intake (e.g. ManyChat custom fields)
+    utm_source: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    utm_medium: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    utm_campaign: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    utm_content: Mapped[str | None] = mapped_column(String(100), nullable=True)
+
     # ── AI Context ───────────────────────────────────────────
     buyer_stage: Mapped[BuyerStage] = mapped_column(
         Enum(BuyerStage, name="buyer_stage", values_callable=lambda x: [e.value for e in x]),

@@ -39,6 +39,32 @@ from app.schemas.ai_engine import (
 
 logger = logging.getLogger(__name__)
 
+_UTM_FIELD_KEYS = ("utm_source", "utm_medium", "utm_campaign", "utm_content")
+
+
+def _utm_from_custom_fields(custom_fields: dict) -> dict[str, str | None]:
+    """Normalize UTM strings from webhook / intake custom_fields."""
+    out: dict[str, str | None] = {}
+    for key in _UTM_FIELD_KEYS:
+        v = custom_fields.get(key)
+        if v is None:
+            out[key] = None
+            continue
+        s = str(v).strip()
+        out[key] = s if s else None
+    return out
+
+
+def _apply_utm_first_touch(subscriber: Subscriber, utm: dict[str, str | None]) -> None:
+    """Set UTM columns only where still empty (first-touch attribution)."""
+    for key in _UTM_FIELD_KEYS:
+        val = utm.get(key)
+        if not val:
+            continue
+        if getattr(subscriber, key) is None:
+            setattr(subscriber, key, val)
+
+
 # Redis cache config
 _CONTEXT_CACHE_PREFIX = "convctx:"
 _CONTEXT_CACHE_TTL = 600  # 10 minutes
@@ -340,6 +366,7 @@ async def _get_or_create_subscriber(
             subscriber.attora_campaign_id = await _resolve_attora_campaign_id(
                 db, org_id, subscriber.campaign_id, manychat_subscriber_id
             )
+        _apply_utm_first_touch(subscriber, _utm_from_custom_fields(custom_fields))
         return subscriber
 
     # Parse channel
@@ -360,6 +387,7 @@ async def _get_or_create_subscriber(
             db, org_id, meta_campaign_id, manychat_subscriber_id
         )
 
+    utm = _utm_from_custom_fields(custom_fields)
     subscriber = Subscriber(
         org_id=org_id,
         manychat_subscriber_id=manychat_subscriber_id,
@@ -376,6 +404,10 @@ async def _get_or_create_subscriber(
         ad_set_id=custom_fields.get("ad_set_id"),
         campaign_id=meta_campaign_id,
         attora_campaign_id=attora_campaign_id,
+        utm_source=utm["utm_source"],
+        utm_medium=utm["utm_medium"],
+        utm_campaign=utm["utm_campaign"],
+        utm_content=utm["utm_content"],
     )
     db.add(subscriber)
     await db.flush()  # Get the ID assigned

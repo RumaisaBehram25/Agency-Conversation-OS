@@ -37,6 +37,10 @@ class SubscriberListItem(BaseModel):
     first_message_at: datetime | None = None
     last_message_at: datetime | None = None
     created_at: datetime
+    utm_source: str | None = None
+    utm_medium: str | None = None
+    utm_campaign: str | None = None
+    utm_content: str | None = None
 
     model_config = {"from_attributes": True}
 
@@ -69,6 +73,12 @@ class SubscriberDetail(BaseModel):
     first_message_at: datetime | None = None
     last_message_at: datetime | None = None
     total_messages: int
+
+    # First-touch UTMs (intake)
+    utm_source: str | None = None
+    utm_medium: str | None = None
+    utm_campaign: str | None = None
+    utm_content: str | None = None
 
     # Timestamps
     created_at: datetime

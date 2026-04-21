@@ -16,6 +16,12 @@ function displayInitial(lead: SubscriberDetail): string {
   return lead.first_name?.charAt(0)?.toUpperCase() || lead.last_name?.charAt(0)?.toUpperCase() || '?';
 }
 
+function hasIntakeUtm(lead: SubscriberDetail): boolean {
+  return Boolean(
+    lead.utm_source || lead.utm_medium || lead.utm_campaign || lead.utm_content
+  );
+}
+
 export default function LeadProfile({ lead }: LeadProfileProps) {
   const navigate = useNavigate();
 
@@ -70,6 +76,38 @@ export default function LeadProfile({ lead }: LeadProfileProps) {
             )}
           </dl>
         </div>
+
+        {hasIntakeUtm(lead) && (
+          <div className="card">
+            <h3 className="text-sm font-semibold text-gray-900 mb-3">Intake UTMs</h3>
+            <dl className="space-y-2 text-sm">
+              {lead.utm_source && (
+                <div>
+                  <dt className="text-xs text-gray-500">utm_source</dt>
+                  <dd className="font-mono text-gray-800">{lead.utm_source}</dd>
+                </div>
+              )}
+              {lead.utm_medium && (
+                <div>
+                  <dt className="text-xs text-gray-500">utm_medium</dt>
+                  <dd className="font-mono text-gray-800">{lead.utm_medium}</dd>
+                </div>
+              )}
+              {lead.utm_campaign && (
+                <div>
+                  <dt className="text-xs text-gray-500">utm_campaign</dt>
+                  <dd className="font-mono text-gray-800 break-all">{lead.utm_campaign}</dd>
+                </div>
+              )}
+              {lead.utm_content && (
+                <div>
+                  <dt className="text-xs text-gray-500">utm_content</dt>
+                  <dd className="font-mono text-gray-800">{lead.utm_content}</dd>
+                </div>
+              )}
+            </dl>
+          </div>
+        )}
 
         {/* Buyer Stage */}
         <div className="card">

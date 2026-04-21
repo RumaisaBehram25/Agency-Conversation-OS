@@ -113,6 +113,10 @@ async def list_subscribers(
             first_message_at=sub.first_message_at,
             last_message_at=sub.last_message_at,
             created_at=sub.created_at,
+            utm_source=sub.utm_source,
+            utm_medium=sub.utm_medium,
+            utm_campaign=sub.utm_campaign,
+            utm_content=sub.utm_content,
         )
         for sub in subscribers
     ]
@@ -179,6 +183,10 @@ async def get_subscriber(
         first_message_at=subscriber.first_message_at,
         last_message_at=subscriber.last_message_at,
         total_messages=subscriber.total_messages,
+        utm_source=subscriber.utm_source,
+        utm_medium=subscriber.utm_medium,
+        utm_campaign=subscriber.utm_campaign,
+        utm_content=subscriber.utm_content,
         created_at=subscriber.created_at,
         updated_at=subscriber.updated_at,
         conversations=conversation_summaries,

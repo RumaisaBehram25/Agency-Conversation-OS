@@ -1,5 +1,76 @@
 import client from './client';
-import type { CampaignSummary, AdSetSummary, AdSummary, BreakdownItem } from '../types';
+import type {
+  AdCampaign,
+  AdCampaignCreate,
+  AdCampaignUpdate,
+  AdSetSummary,
+  AdSummary,
+  BreakdownItem,
+  CampaignSummary,
+  CampaignUTM,
+  UTMGenerateRequest,
+} from '../types';
+
+// ─── Attora-managed Ad Campaigns (CRUD + UTM) ───────────────────────────────
+
+export async function listAdCampaigns(
+  params: { is_attora_managed?: boolean; is_active?: boolean } = {}
+): Promise<AdCampaign[]> {
+  const qs = new URLSearchParams();
+  if (params.is_attora_managed !== undefined)
+    qs.set('is_attora_managed', String(params.is_attora_managed));
+  if (params.is_active !== undefined) qs.set('is_active', String(params.is_active));
+
+  const suffix = qs.toString() ? `?${qs.toString()}` : '';
+  const response = await client.get<AdCampaign[]>(`/campaigns${suffix}`);
+  return response.data;
+}
+
+export async function createAdCampaign(payload: AdCampaignCreate): Promise<AdCampaign> {
+  const response = await client.post<AdCampaign>('/campaigns', payload);
+  return response.data;
+}
+
+export async function getAdCampaign(campaignId: string): Promise<AdCampaign> {
+  const response = await client.get<AdCampaign>(`/campaigns/${campaignId}`);
+  return response.data;
+}
+
+export async function updateAdCampaign(
+  campaignId: string,
+  payload: AdCampaignUpdate
+): Promise<AdCampaign> {
+  const response = await client.patch<AdCampaign>(`/campaigns/${campaignId}`, payload);
+  return response.data;
+}
+
+export async function deleteAdCampaign(campaignId: string): Promise<void> {
+  await client.delete(`/campaigns/${campaignId}`);
+}
+
+export async function generateCampaignUtms(
+  campaignId: string,
+  payload: UTMGenerateRequest
+): Promise<CampaignUTM> {
+  const response = await client.post<CampaignUTM>(
+    `/campaigns/${campaignId}/generate-utms`,
+    payload
+  );
+  return response.data;
+}
+
+export async function getCampaignUtmForSubscriber(
+  campaignId: string,
+  subscriberId: string
+): Promise<CampaignUTM> {
+  const qs = new URLSearchParams({ subscriber_id: subscriberId });
+  const response = await client.get<CampaignUTM>(
+    `/campaigns/${campaignId}/utm-for-subscriber?${qs.toString()}`
+  );
+  return response.data;
+}
+
+// ─── Campaign Metrics (Meta drill-down) ─────────────────────────────────────
 
 export async function getCampaigns(
   params: { date_from?: string; date_to?: string } = {}
@@ -9,7 +80,7 @@ export async function getCampaigns(
   if (params.date_to) qs.set('date_to', params.date_to);
 
   const response = await client.get<CampaignSummary[]>(
-    `/campaigns?${qs.toString()}`
+    `/campaign-metrics?${qs.toString()}`
   );
   return response.data;
 }
@@ -23,7 +94,7 @@ export async function getCampaignAdSets(
   if (params?.date_to) qs.set('date_to', params.date_to);
 
   const response = await client.get<AdSetSummary[]>(
-    `/campaigns/${campaignId}/adsets?${qs.toString()}`
+    `/campaign-metrics/${campaignId}/adsets?${qs.toString()}`
   );
   return response.data;
 }
@@ -38,7 +109,7 @@ export async function getAdSetAds(
   if (params?.date_to) qs.set('date_to', params.date_to);
 
   const response = await client.get<AdSummary[]>(
-    `/campaigns/${campaignId}/adsets/${adsetId}/ads?${qs.toString()}`
+    `/campaign-metrics/${campaignId}/adsets/${adsetId}/ads?${qs.toString()}`
   );
   return response.data;
 }
@@ -54,7 +125,7 @@ export async function getCampaignBreakdowns(
   if (params?.date_to) qs.set('date_to', params.date_to);
 
   const response = await client.get<BreakdownItem[]>(
-    `/campaigns/${campaignId}/breakdowns?${qs.toString()}`
+    `/campaign-metrics/${campaignId}/breakdowns?${qs.toString()}`
   );
   return response.data;
 }

@@ -176,7 +176,69 @@ export interface SubscriberDetail {
   conversations: SubscriberConversation[];
 }
 
-// ─── Campaigns ──────────────────────────────────────────────────────────────
+// ─── Ad Campaigns (Attora-managed registry) ─────────────────────────────────
+
+export interface CampaignUTM {
+  id: string;
+  campaign_id: string;
+  utm_source: string;
+  utm_medium: string;
+  utm_campaign: string;
+  product_page_url: string | null;
+  checkout_url: string | null;
+  success_url: string | null;
+  product_page_utm_url: string | null;
+  checkout_utm_url: string | null;
+  success_utm_url: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AdCampaign {
+  id: string;
+  org_id: string;
+  name: string;
+  description: string | null;
+  meta_campaign_id: string | null;
+  meta_ad_set_id: string | null;
+  is_attora_managed: boolean;
+  product_id: string | null;
+  is_active: boolean;
+  utm: CampaignUTM | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AdCampaignCreate {
+  name: string;
+  description?: string | null;
+  meta_campaign_id?: string | null;
+  meta_ad_set_id?: string | null;
+  is_attora_managed?: boolean;
+  product_id?: string | null;
+  is_active?: boolean;
+}
+
+export interface AdCampaignUpdate {
+  name?: string;
+  description?: string | null;
+  meta_campaign_id?: string | null;
+  meta_ad_set_id?: string | null;
+  is_attora_managed?: boolean;
+  product_id?: string | null;
+  is_active?: boolean;
+}
+
+export interface UTMGenerateRequest {
+  product_page_url?: string | null;
+  checkout_url?: string | null;
+  success_url?: string | null;
+  utm_source?: string;
+  utm_medium?: string;
+  utm_campaign?: string | null;
+}
+
+// ─── Campaign Metrics (Meta drill-down) ─────────────────────────────────────
 
 export interface CampaignSummary {
   meta_campaign_id: string;

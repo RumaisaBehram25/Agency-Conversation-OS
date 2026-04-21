@@ -1,4 +1,5 @@
 import { useEffect, useState, useCallback } from 'react';
+import { AxiosError } from 'axios';
 import { getConversations, type ConversationFilters } from '../api/conversations';
 import type { ConversationListItem } from '../types';
 import ConversationList from '../components/conversations/ConversationList';
@@ -44,8 +45,19 @@ export default function ConversationsPage() {
       const result = await getConversations(filters);
       setConversations(result.items);
       setTotal(result.total);
-    } catch {
-      setError('Failed to load conversations');
+    } catch (err) {
+      if (err instanceof AxiosError) {
+        const detail = err.response?.data?.detail;
+        const status = err.response?.status;
+        setError(
+          `Failed to load conversations (${status ?? 'network'}): ${
+            typeof detail === 'string' ? detail : err.message
+          }`
+        );
+      } else {
+        setError('Failed to load conversations');
+      }
+      console.error('getConversations failed:', err);
     } finally {
       setLoading(false);
     }

@@ -120,7 +120,7 @@ class ManyChatWebhookResponse(BaseModel):
         response_text: str,
         buyer_stage: str | None = None,
         quick_replies: list[str] | None = None,
-        custom_field_updates: dict[str, str] | None = None,
+        custom_field_updates: dict[str, str | bool | int | float | None] | None = None,
     ) -> ManyChatWebhookResponse:
         """
         Build a ManyChat v2 response from AI engine output.
@@ -130,6 +130,8 @@ class ManyChatWebhookResponse(BaseModel):
             buyer_stage: Updated buyer stage to set as custom field.
             quick_replies: Suggested quick reply button captions.
             custom_field_updates: Additional custom field key-value pairs.
+                Non-string values (bool/int/float/None) are stringified — ManyChat
+                custom fields are stored as strings on their side.
         """
         messages = [ManyChatTextMessage(text=response_text)]
 
@@ -144,11 +146,19 @@ class ManyChatWebhookResponse(BaseModel):
             )
         if custom_field_updates:
             for field_name, value in custom_field_updates.items():
+                # ManyChat fields are strings. Stringify booleans as lowercase
+                # ("true"/"false") to match JSON convention; skip nulls entirely.
+                if value is None:
+                    continue
+                if isinstance(value, bool):
+                    str_value = "true" if value else "false"
+                else:
+                    str_value = str(value)
                 actions.append(
                     ManyChatAction(
                         action="set_field_value",
                         field_name=field_name,
-                        value=value,
+                        value=str_value,
                     )
                 )
 

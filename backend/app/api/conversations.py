@@ -5,10 +5,13 @@ GET  /api/conversations          — Paginated list with filters
 GET  /api/conversations/{id}     — Full conversation detail with messages
 """
 
+import re
 import uuid
 from datetime import date, datetime, timezone
+from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
+from pydantic import BeforeValidator
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -31,6 +34,26 @@ from app.api.deps import get_current_user, get_org_id
 router = APIRouter()
 
 
+def _parse_query_date(v: object) -> date | None:
+    """Accept ISO YYYY-MM-DD (API default) and US-style M/D/YYYY (common from Swagger UI)."""
+    if v is None:
+        return None
+    if isinstance(v, date):
+        return v
+    if not isinstance(v, str):
+        raise ValueError("expected a date string")
+    s = v.strip()
+    if not s:
+        return None
+    if re.fullmatch(r"\d{4}-\d{2}-\d{2}", s):
+        return date.fromisoformat(s)
+    m = re.fullmatch(r"(\d{1,2})/(\d{1,2})/(\d{4})", s)
+    if m:
+        month, day, year = (int(x) for x in m.groups())
+        return date(year, month, day)
+    raise ValueError(f"unrecognized date format: {s!r}; use YYYY-MM-DD or M/D/YYYY")
+
+
 @router.get("", response_model=PaginatedResponse[ConversationListItem])
 async def list_conversations(
     current_user: User = Depends(get_current_user),
@@ -38,8 +61,16 @@ async def list_conversations(
     db: AsyncSession = Depends(get_db),
     status_filter: str | None = Query(None, alias="status"),
     channel: str | None = Query(None),
-    date_from: date | None = Query(None),
-    date_to: date | None = Query(None),
+    date_from: Annotated[
+        date | None,
+        BeforeValidator(_parse_query_date),
+        Query(description="Inclusive start (UTC). ISO: YYYY-MM-DD, or M/D/YYYY."),
+    ] = None,
+    date_to: Annotated[
+        date | None,
+        BeforeValidator(_parse_query_date),
+        Query(description="Inclusive end (UTC). ISO: YYYY-MM-DD, or M/D/YYYY."),
+    ] = None,
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
 ) -> PaginatedResponse[ConversationListItem]:
@@ -234,3 +265,38 @@ async def get_conversation(
         subscriber=subscriber_info,
         messages=message_responses,
     )
+
+
+@router.delete(
+    "/{conversation_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    response_class=Response,
+)
+async def delete_conversation(
+    conversation_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    org_id: uuid.UUID = Depends(get_org_id),
+    db: AsyncSession = Depends(get_db),
+) -> Response:
+    """
+    Delete a conversation and all its messages (cascade via FK).
+
+    The subscriber row is preserved — only this specific conversation and
+    the messages it contains get removed.
+    """
+    result = await db.execute(
+        select(Conversation)
+        .where(Conversation.id == conversation_id)
+        .where(Conversation.org_id == org_id)
+    )
+    conversation = result.scalar_one_or_none()
+
+    if conversation is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Conversation not found",
+        )
+
+    await db.delete(conversation)
+    await db.commit()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)

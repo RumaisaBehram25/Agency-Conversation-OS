@@ -31,3 +31,7 @@ export async function getConversation(id: string): Promise<ConversationDetail> {
   const response = await client.get<ConversationDetail>(`/conversations/${id}`);
   return response.data;
 }
+
+export async function deleteConversation(id: string): Promise<void> {
+  await client.delete(`/conversations/${id}`);
+}

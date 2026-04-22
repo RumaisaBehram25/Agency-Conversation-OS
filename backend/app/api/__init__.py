@@ -18,6 +18,7 @@ from app.api.conversions import router as conversions_router
 from app.api.cron import router as cron_router
 from app.api.olap import router as olap_router
 from app.api.diagnostics import router as diagnostics_router
+from app.api.ai_test import router as ai_test_router
 
 api_router = APIRouter()
 
@@ -39,3 +40,4 @@ api_router.include_router(campaign_metrics_router, prefix="/campaign-metrics", t
 api_router.include_router(conversions_router, prefix="/conversions", tags=["conversions"])
 api_router.include_router(cron_router, prefix="/cron", tags=["cron"])
 api_router.include_router(olap_router, prefix="/olap", tags=["olap"])
+api_router.include_router(ai_test_router, prefix="/ai-test", tags=["ai-test"])

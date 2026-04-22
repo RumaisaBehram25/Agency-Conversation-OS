@@ -34,3 +34,7 @@ export async function getSubscriber(id: string): Promise<SubscriberDetail> {
   const response = await client.get<SubscriberDetail>(`/subscribers/${id}`);
   return response.data;
 }
+
+export async function deleteSubscriber(id: string): Promise<void> {
+  await client.delete(`/subscribers/${id}`);
+}

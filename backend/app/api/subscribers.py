@@ -8,7 +8,7 @@ GET  /api/subscribers/{id}     — Full subscriber detail
 import uuid
 from datetime import date, datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -191,3 +191,38 @@ async def get_subscriber(
         updated_at=subscriber.updated_at,
         conversations=conversation_summaries,
     )
+
+
+@router.delete(
+    "/{subscriber_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    response_class=Response,
+)
+async def delete_subscriber(
+    subscriber_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    org_id: uuid.UUID = Depends(get_org_id),
+    db: AsyncSession = Depends(get_db),
+) -> Response:
+    """
+    Delete a subscriber and all their related data.
+
+    Cascades via FK constraints to: conversations → messages,
+    and conversion_events tied to this subscriber.
+    """
+    result = await db.execute(
+        select(Subscriber)
+        .where(Subscriber.id == subscriber_id)
+        .where(Subscriber.org_id == org_id)
+    )
+    subscriber = result.scalar_one_or_none()
+
+    if subscriber is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Subscriber not found",
+        )
+
+    await db.delete(subscriber)
+    await db.commit()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)

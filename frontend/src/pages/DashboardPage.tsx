@@ -1,6 +1,5 @@
-import { useEffect, useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import { getDashboard } from '../api/dashboard';
-import type { DashboardResponse } from '../types';
 import MetricCard from '../components/dashboard/MetricCard';
 import CampaignHealth from '../components/dashboard/CampaignHealth';
 import LoadingSpinner from '../components/ui/LoadingSpinner';
@@ -19,32 +18,19 @@ function getCCRColor(ccr: number): 'green' | 'yellow' | 'red' {
 }
 
 export default function DashboardPage() {
-  const [data, setData] = useState<DashboardResponse | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState('');
+  const { data, isLoading, isError } = useQuery({
+    queryKey: ['dashboard'],
+    queryFn: getDashboard,
+  });
 
-  useEffect(() => {
-    async function load() {
-      try {
-        const result = await getDashboard();
-        setData(result);
-      } catch {
-        setError('Failed to load dashboard data');
-      } finally {
-        setLoading(false);
-      }
-    }
-    load();
-  }, []);
-
-  if (loading) {
+  if (isLoading && !data) {
     return <LoadingSpinner className="mt-20" size="lg" />;
   }
 
-  if (error) {
+  if (isError) {
     return (
       <div className="mt-20 text-center">
-        <p className="text-red-600">{error}</p>
+        <p className="text-red-600">Failed to load dashboard data</p>
       </div>
     );
   }

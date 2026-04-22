@@ -254,17 +254,19 @@ async def generate_campaign_utms(
 async def get_utm_for_subscriber(
     campaign_id: uuid.UUID,
     subscriber_id: str = Query(
-        ..., min_length=1, description="Subscriber identifier to tag onto every UTM URL"
+        ..., min_length=1, description="Subscriber identifier (ManyChat ID) to tag onto every UTM URL"
     ),
     current_user: User = Depends(get_current_user),
     org_id: uuid.UUID = Depends(get_org_id),
     db: AsyncSession = Depends(get_db),
 ) -> CampaignUTMResponse:
     """
-    Return the campaign's UTM URLs with `attora_sub=<subscriber_id>` appended to each.
+    Return the campaign's UTM URLs with both `attora_sub=<manychat_id>` and
+    `attora_id=<attora_uuid>` appended to each, so the landing page can
+    attribute the conversion back using either identifier.
 
-    The AI engine calls this when including a product/checkout link in a reply so the
-    landing page can attribute the conversion back to the exact subscriber.
+    If the subscriber doesn't exist yet in this org, only `attora_sub` is stamped
+    (no UUID to attach).
     """
     campaign = await _load_campaign(db, org_id, campaign_id)
     if campaign.utm is None:
@@ -273,8 +275,21 @@ async def get_utm_for_subscriber(
             detail="Campaign has no UTM set. Call generate-utms first.",
         )
 
+    # Look up the subscriber so we can also stamp their internal UUID.
+    from app.models.subscriber import Subscriber
+
+    sub_result = await db.execute(
+        select(Subscriber.id).where(
+            Subscriber.org_id == org_id,
+            Subscriber.manychat_subscriber_id == subscriber_id,
+        )
+    )
+    subscriber_uuid = sub_result.scalar_one_or_none()
+
     utm = campaign.utm
-    extra = {"attora_sub": subscriber_id}
+    extra: dict[str, str] = {"attora_sub": subscriber_id}
+    if subscriber_uuid is not None:
+        extra["attora_id"] = str(subscriber_uuid)
 
     def _tag(url: str | None) -> str | None:
         return build_utm_url(url, extra) if url else None

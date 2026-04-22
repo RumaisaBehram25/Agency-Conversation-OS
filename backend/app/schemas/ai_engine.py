@@ -80,7 +80,8 @@ class MessageContext(BaseModel):
 class SubscriberContext(BaseModel):
     """Subscriber profile data for prompt context."""
 
-    subscriber_id: str
+    subscriber_id: str  # ManyChat subscriber ID (platform-scoped)
+    attora_id: str | None = None  # Attora's internal UUID (stable, platform-agnostic)
     first_name: str | None = None
     last_name: str | None = None
     buyer_stage: str = "awareness"
@@ -176,9 +177,13 @@ class AIResponse(BaseModel):
     suggested_quick_replies: list[str] = Field(
         default_factory=list, description="Suggested quick reply buttons"
     )
-    custom_field_updates: dict[str, str] = Field(
+    custom_field_updates: dict[str, str | bool | int | float | None] = Field(
         default_factory=dict,
-        description="Custom field updates to send back to ManyChat",
+        description=(
+            "Custom field updates to send back to ManyChat. Accepts "
+            "strings, booleans, numbers, or null — ManyChat coerces "
+            "non-string values at send time."
+        ),
     )
     compliance_flags: list[str] = Field(
         default_factory=list, description="Compliance violations detected"

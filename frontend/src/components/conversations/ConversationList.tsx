@@ -1,14 +1,34 @@
+import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import Badge, { buyerStageBadgeColor, statusBadgeColor, channelBadgeColor } from '../ui/Badge';
 import { formatRelativeTime, truncate } from '../../utils/formatters';
+import { deleteConversation } from '../../api/conversations';
 import type { ConversationListItem } from '../../types';
 
 interface ConversationListProps {
   conversations: ConversationListItem[];
+  onDeleted?: () => void;
 }
 
-export default function ConversationList({ conversations }: ConversationListProps) {
+export default function ConversationList({ conversations, onDeleted }: ConversationListProps) {
   const navigate = useNavigate();
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+
+  async function handleDelete(event: React.MouseEvent, conv: ConversationListItem) {
+    event.stopPropagation();
+    const who = conv.subscriber_name || 'this conversation';
+    if (!confirm(`Delete conversation with ${who}? All messages will be removed. The subscriber will be kept.`))
+      return;
+    setDeletingId(conv.id);
+    try {
+      await deleteConversation(conv.id);
+      onDeleted?.();
+    } catch {
+      alert('Failed to delete conversation.');
+    } finally {
+      setDeletingId(null);
+    }
+  }
 
   if (conversations.length === 0) {
     return (
@@ -40,6 +60,9 @@ export default function ConversationList({ conversations }: ConversationListProp
             </th>
             <th className="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
               Status
+            </th>
+            <th className="px-6 py-3 text-right text-xs font-medium uppercase tracking-wider text-gray-500">
+              Actions
             </th>
           </tr>
         </thead>
@@ -87,6 +110,20 @@ export default function ConversationList({ conversations }: ConversationListProp
                 <Badge color={statusBadgeColor(conv.status)}>
                   {conv.status}
                 </Badge>
+              </td>
+              <td className="whitespace-nowrap px-6 py-4 text-right">
+                <button
+                  type="button"
+                  onClick={(e) => void handleDelete(e, conv)}
+                  disabled={deletingId === conv.id}
+                  aria-label="Delete conversation"
+                  title="Delete conversation + all messages"
+                  className="rounded-md p-1.5 text-gray-400 hover:bg-red-50 hover:text-red-600 disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth="1.75" stroke="currentColor" className="h-4 w-4">
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 00-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 013.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 00-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 00-7.5 0" />
+                  </svg>
+                </button>
               </td>
             </tr>
           ))}

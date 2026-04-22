@@ -1,7 +1,6 @@
-import { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
+import { useQuery } from '@tanstack/react-query';
 import { getSubscriber } from '../api/subscribers';
-import type { SubscriberDetail } from '../types';
 import LeadProfile from '../components/leads/LeadProfile';
 import LoadingSpinner from '../components/ui/LoadingSpinner';
 import Button from '../components/ui/Button';
@@ -9,33 +8,25 @@ import Button from '../components/ui/Button';
 export default function LeadDetailPage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
-  const [lead, setLead] = useState<SubscriberDetail | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState('');
 
-  useEffect(() => {
-    async function load() {
-      if (!id) return;
-      try {
-        const result = await getSubscriber(id);
-        setLead(result);
-      } catch {
-        setError('Failed to load lead details');
-      } finally {
-        setLoading(false);
-      }
-    }
-    load();
-  }, [id]);
+  const {
+    data: lead,
+    isLoading,
+    isError,
+  } = useQuery({
+    queryKey: ['subscriber', id],
+    queryFn: () => getSubscriber(id!),
+    enabled: !!id,
+  });
 
-  if (loading) {
+  if (isLoading && !lead) {
     return <LoadingSpinner className="mt-20" size="lg" />;
   }
 
-  if (error || !lead) {
+  if (isError || !lead) {
     return (
       <div className="mt-20 text-center">
-        <p className="text-red-600 mb-4">{error || 'Lead not found'}</p>
+        <p className="text-red-600 mb-4">{isError ? 'Failed to load lead details' : 'Lead not found'}</p>
         <Button variant="secondary" onClick={() => navigate('/leads')}>
           Back to Leads
         </Button>

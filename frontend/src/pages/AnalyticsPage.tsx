@@ -1,8 +1,9 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { getAnalytics, getROI, getAIPerformance, getExportUrl } from '../api/analytics';
 import { getCampaigns } from '../api/campaigns';
 import { syncMetaNow } from '../api/settings';
-import type { AnalyticsResponse, ROIResponse, AIPerformanceResponse, CampaignSummary } from '../types';
+import type { CampaignSummary } from '../types';
 import AnalyticsMetricCards from '../components/analytics/MetricCards';
 import FunnelChart from '../components/analytics/FunnelChart';
 import TrendChart from '../components/analytics/TrendChart';
@@ -25,17 +26,10 @@ import {
 } from 'recharts';
 
 export default function AnalyticsPage() {
+  const queryClient = useQueryClient();
   const [dateFrom, setDateFrom] = useState(daysAgoISO(30));
   const [dateTo, setDateTo] = useState(todayISO());
-
-  const [campaigns, setCampaigns] = useState<CampaignSummary[]>([]);
   const [selectedCampaign, setSelectedCampaign] = useState<string>('');
-
-  const [analytics, setAnalytics] = useState<AnalyticsResponse | null>(null);
-  const [roi, setRoi] = useState<ROIResponse | null>(null);
-  const [aiPerf, setAiPerf] = useState<AIPerformanceResponse | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState('');
 
   const [syncing, setSyncing] = useState(false);
   const [syncStatus, setSyncStatus] = useState<string | null>(null);
@@ -45,35 +39,46 @@ export default function AnalyticsPage() {
 
   const SYNC_ETA_MS = 60_000;
 
-  // Fetch campaign list when date range changes
-  useEffect(() => {
-    getCampaigns({ date_from: dateFrom, date_to: dateTo })
-      .then(setCampaigns)
-      .catch(() => setCampaigns([]));
-  }, [dateFrom, dateTo]);
+  const dateRange = { date_from: dateFrom, date_to: dateTo };
+
+  const { data: campaigns = [] } = useQuery<CampaignSummary[]>({
+    queryKey: ['campaigns-for-analytics', dateRange],
+    queryFn: () => getCampaigns(dateRange),
+  });
+
+  const analyticsQuery = useQuery({
+    queryKey: ['analytics', dateRange],
+    queryFn: () => getAnalytics(dateRange),
+  });
+  const roiQuery = useQuery({
+    queryKey: ['roi', dateRange],
+    queryFn: () => getROI(dateRange),
+  });
+  const aiPerfQuery = useQuery({
+    queryKey: ['ai-performance', dateRange],
+    queryFn: () => getAIPerformance(dateRange),
+  });
+
+  const analytics = analyticsQuery.data ?? null;
+  const roi = roiQuery.data ?? null;
+  const aiPerf = aiPerfQuery.data ?? null;
+  const loading =
+    analyticsQuery.isLoading || roiQuery.isLoading || aiPerfQuery.isLoading;
+  const isFirstLoad =
+    loading && (!analytics || !roi || !aiPerf);
+  const error =
+    analyticsQuery.isError || roiQuery.isError || aiPerfQuery.isError
+      ? 'Failed to load analytics data'
+      : '';
 
   const load = useCallback(async () => {
-    setLoading(true);
-    setError('');
-    try {
-      const [analyticsData, roiData, aiPerfData] = await Promise.all([
-        getAnalytics({ date_from: dateFrom, date_to: dateTo }),
-        getROI({ date_from: dateFrom, date_to: dateTo }),
-        getAIPerformance({ date_from: dateFrom, date_to: dateTo }),
-      ]);
-      setAnalytics(analyticsData);
-      setRoi(roiData);
-      setAiPerf(aiPerfData);
-    } catch {
-      setError('Failed to load analytics data');
-    } finally {
-      setLoading(false);
-    }
-  }, [dateFrom, dateTo]);
-
-  useEffect(() => {
-    load();
-  }, [load]);
+    await Promise.all([
+      queryClient.invalidateQueries({ queryKey: ['analytics', dateRange] }),
+      queryClient.invalidateQueries({ queryKey: ['roi', dateRange] }),
+      queryClient.invalidateQueries({ queryKey: ['ai-performance', dateRange] }),
+      queryClient.invalidateQueries({ queryKey: ['campaigns-for-analytics', dateRange] }),
+    ]);
+  }, [queryClient, dateRange]);
 
   useEffect(() => {
     return () => {
@@ -148,7 +153,7 @@ export default function AnalyticsPage() {
         document.body.removeChild(a);
         URL.revokeObjectURL(blobUrl);
       })
-      .catch(() => setError('Failed to export CSV'));
+      .catch(() => alert('Failed to export CSV'));
   }
 
   // Prepare AI performance fallback trend data for chart
@@ -228,7 +233,7 @@ export default function AnalyticsPage() {
         </div>
       )}
 
-      {loading ? (
+      {isFirstLoad ? (
         <LoadingSpinner className="mt-12" size="lg" />
       ) : error ? (
         <div className="mt-12 text-center text-red-600">{error}</div>

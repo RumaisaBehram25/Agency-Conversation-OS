@@ -1,10 +1,13 @@
+import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import Badge, { buyerStageBadgeColor, channelBadgeColor } from '../ui/Badge';
 import { formatDate } from '../../utils/formatters';
+import { deleteSubscriber } from '../../api/subscribers';
 import type { SubscriberListItem } from '../../types';
 
 interface LeadListProps {
   leads: SubscriberListItem[];
+  onDeleted?: () => void;
 }
 
 function displayName(lead: SubscriberListItem): string {
@@ -16,8 +19,26 @@ function displayInitial(lead: SubscriberListItem): string {
   return lead.first_name?.charAt(0)?.toUpperCase() || lead.last_name?.charAt(0)?.toUpperCase() || '?';
 }
 
-export default function LeadList({ leads }: LeadListProps) {
+export default function LeadList({ leads, onDeleted }: LeadListProps) {
   const navigate = useNavigate();
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+
+  async function handleDelete(event: React.MouseEvent, lead: SubscriberListItem) {
+    event.stopPropagation();
+    const name =
+      [lead.first_name, lead.last_name].filter(Boolean).join(' ') || 'this lead';
+    if (!confirm(`Delete ${name}? This removes all their conversations, messages, and conversion history. This cannot be undone.`))
+      return;
+    setDeletingId(lead.id);
+    try {
+      await deleteSubscriber(lead.id);
+      onDeleted?.();
+    } catch {
+      alert('Failed to delete lead.');
+    } finally {
+      setDeletingId(null);
+    }
+  }
 
   if (leads.length === 0) {
     return (
@@ -52,6 +73,9 @@ export default function LeadList({ leads }: LeadListProps) {
             </th>
             <th className="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
               Messages
+            </th>
+            <th className="px-6 py-3 text-right text-xs font-medium uppercase tracking-wider text-gray-500">
+              Actions
             </th>
           </tr>
         </thead>
@@ -99,6 +123,20 @@ export default function LeadList({ leads }: LeadListProps) {
               </td>
               <td className="whitespace-nowrap px-6 py-4 text-sm text-gray-500">
                 {lead.total_messages}
+              </td>
+              <td className="whitespace-nowrap px-6 py-4 text-right">
+                <button
+                  type="button"
+                  onClick={(e) => void handleDelete(e, lead)}
+                  disabled={deletingId === lead.id}
+                  aria-label="Delete lead"
+                  title="Delete lead + all conversations"
+                  className="rounded-md p-1.5 text-gray-400 hover:bg-red-50 hover:text-red-600 disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth="1.75" stroke="currentColor" className="h-4 w-4">
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 00-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 013.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 00-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 00-7.5 0" />
+                  </svg>
+                </button>
               </td>
             </tr>
           ))}

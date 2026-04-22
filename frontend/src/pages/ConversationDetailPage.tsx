@@ -1,7 +1,6 @@
-import { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
+import { useQuery } from '@tanstack/react-query';
 import { getConversation } from '../api/conversations';
-import type { ConversationDetail } from '../types';
 import ConversationDetailView from '../components/conversations/ConversationDetail';
 import LoadingSpinner from '../components/ui/LoadingSpinner';
 import Button from '../components/ui/Button';
@@ -9,33 +8,25 @@ import Button from '../components/ui/Button';
 export default function ConversationDetailPage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
-  const [conversation, setConversation] = useState<ConversationDetail | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState('');
 
-  useEffect(() => {
-    async function load() {
-      if (!id) return;
-      try {
-        const result = await getConversation(id);
-        setConversation(result);
-      } catch {
-        setError('Failed to load conversation');
-      } finally {
-        setLoading(false);
-      }
-    }
-    load();
-  }, [id]);
+  const {
+    data: conversation,
+    isLoading,
+    isError,
+  } = useQuery({
+    queryKey: ['conversation', id],
+    queryFn: () => getConversation(id!),
+    enabled: !!id,
+  });
 
-  if (loading) {
+  if (isLoading && !conversation) {
     return <LoadingSpinner className="mt-20" size="lg" />;
   }
 
-  if (error || !conversation) {
+  if (isError || !conversation) {
     return (
       <div className="mt-20 text-center">
-        <p className="text-red-600 mb-4">{error || 'Conversation not found'}</p>
+        <p className="text-red-600 mb-4">{isError ? 'Failed to load conversation' : 'Conversation not found'}</p>
         <Button variant="secondary" onClick={() => navigate('/conversations')}>
           Back to Conversations
         </Button>

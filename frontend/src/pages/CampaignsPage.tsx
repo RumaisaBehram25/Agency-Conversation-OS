@@ -1,11 +1,13 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   createAdCampaign,
   deleteAdCampaign,
   generateCampaignUtms,
+  getCampaignUtmForSubscriber,
   listAdCampaigns,
 } from '../api/campaigns';
-import type { AdCampaign } from '../types';
+import type { AdCampaign, CampaignUTM } from '../types';
 import LoadingSpinner from '../components/ui/LoadingSpinner';
 
 interface NewCampaignForm {
@@ -35,8 +37,7 @@ const EMPTY_UTM: UtmForm = {
 };
 
 export default function CampaignsPage() {
-  const [campaigns, setCampaigns] = useState<AdCampaign[]>([]);
-  const [loading, setLoading] = useState(true);
+  const queryClient = useQueryClient();
   const [error, setError] = useState('');
 
   const [newCampaign, setNewCampaign] = useState<NewCampaignForm>(EMPTY_NEW);
@@ -47,26 +48,30 @@ export default function CampaignsPage() {
   const [utmSaving, setUtmSaving] = useState(false);
 
   const [viewUtmTarget, setViewUtmTarget] = useState<AdCampaign | null>(null);
+  const [previewSubscriberId, setPreviewSubscriberId] = useState('');
+  const [previewUtm, setPreviewUtm] = useState<CampaignUTM | null>(null);
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const [previewError, setPreviewError] = useState('');
 
   const [pageSize, setPageSize] = useState(25);
   const [currentPage, setCurrentPage] = useState(1);
 
-  const load = useCallback(async () => {
-    setLoading(true);
-    setError('');
-    try {
-      const data = await listAdCampaigns();
-      setCampaigns(data);
-    } catch {
-      setError('Failed to load campaigns');
-    } finally {
-      setLoading(false);
-    }
-  }, []);
+  const {
+    data: campaigns = [],
+    isLoading: loading,
+    isError: campaignsError,
+  } = useQuery({
+    queryKey: ['ad-campaigns'],
+    queryFn: () => listAdCampaigns(),
+  });
+
+  async function load() {
+    await queryClient.invalidateQueries({ queryKey: ['ad-campaigns'] });
+  }
 
   useEffect(() => {
-    void load();
-  }, [load]);
+    if (campaignsError) setError('Failed to load campaigns');
+  }, [campaignsError]);
 
   // Keep currentPage in bounds when the list shrinks (e.g., after unregister)
   // or the user changes page size.
@@ -130,6 +135,58 @@ export default function CampaignsPage() {
     });
   }
 
+  async function handleCreateDummy() {
+    if (creating) return;
+    setCreating(true);
+    setError('');
+    const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+    try {
+      await createAdCampaign({
+        name: `Dummy Test Campaign ${ts}`,
+        description: 'Seeded for UTM + Playground testing.',
+        meta_campaign_id: `dummy_${Date.now()}`,
+        meta_ad_set_id: null,
+        is_attora_managed: true,
+        is_active: true,
+      });
+      await load();
+    } catch (e: unknown) {
+      const msg =
+        e && typeof e === 'object' && 'response' in e
+          ? // @ts-expect-error axios response shape
+            e.response?.data?.detail ?? 'Failed to create dummy campaign'
+          : 'Failed to create dummy campaign';
+      setError(String(msg));
+    } finally {
+      setCreating(false);
+    }
+  }
+
+  async function handlePreviewAsSubscriber() {
+    if (!viewUtmTarget) return;
+    const subId = previewSubscriberId.trim();
+    if (!subId) {
+      setPreviewError('Enter a subscriber ID to preview.');
+      return;
+    }
+    setPreviewLoading(true);
+    setPreviewError('');
+    try {
+      const result = await getCampaignUtmForSubscriber(viewUtmTarget.id, subId);
+      setPreviewUtm(result);
+    } catch (e: unknown) {
+      const msg =
+        e && typeof e === 'object' && 'response' in e
+          ? // @ts-expect-error axios response shape
+            e.response?.data?.detail ?? 'Preview failed'
+          : 'Preview failed';
+      setPreviewError(String(msg));
+      setPreviewUtm(null);
+    } finally {
+      setPreviewLoading(false);
+    }
+  }
+
   async function handleGenerateUtms(event: React.FormEvent) {
     event.preventDefault();
     if (!utmTarget) return;
@@ -166,12 +223,26 @@ export default function CampaignsPage() {
 
   return (
     <div>
-      <div className="mb-6">
-        <h1 className="text-2xl font-bold text-gray-900">Attora Campaigns</h1>
-        <p className="mt-1 text-sm text-gray-500">
-          Register the ad campaigns Attora is authorized to act on. Leads arriving
-          via unregistered campaigns are flagged but not contacted.
-        </p>
+      <div className="mb-6 flex flex-wrap items-start justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-bold text-gray-900">Attora Campaigns</h1>
+          <p className="mt-1 text-sm text-gray-500">
+            Register the ad campaigns Attora is authorized to act on. Leads arriving
+            via unregistered campaigns are flagged but not contacted.
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={() => void handleCreateDummy()}
+          disabled={creating}
+          className="inline-flex items-center gap-1.5 rounded-md border border-dashed border-gray-300 bg-white px-3 py-2 text-sm font-medium text-gray-700 hover:border-primary-400 hover:bg-primary-50 hover:text-primary-700 disabled:opacity-60"
+          title="Create a test campaign you can immediately use to generate UTMs and try the Playground."
+        >
+          <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth="1.75" stroke="currentColor" className="h-4 w-4">
+            <path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
+          </svg>
+          {creating ? 'Creating…' : 'Create dummy campaign'}
+        </button>
       </div>
 
       {error && (
@@ -299,7 +370,12 @@ export default function CampaignsPage() {
                         </button>
                         <button
                           type="button"
-                          onClick={() => setViewUtmTarget(c)}
+                          onClick={() => {
+                            setViewUtmTarget(c);
+                            setPreviewSubscriberId('');
+                            setPreviewUtm(null);
+                            setPreviewError('');
+                          }}
                           disabled={!c.utm}
                           title={c.utm ? 'View UTM URLs' : 'No UTMs to view'}
                           aria-label="View UTM URLs"
@@ -411,14 +487,15 @@ export default function CampaignsPage() {
 
       {viewUtmTarget && viewUtmTarget.utm && (
         <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+          className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/40 p-4 sm:items-center"
           onClick={() => setViewUtmTarget(null)}
         >
           <div
-            className="w-full max-w-2xl space-y-4 rounded-xl bg-white p-6 shadow-xl"
+            className="flex max-h-[90vh] w-full max-w-2xl flex-col rounded-xl bg-white shadow-xl"
             onClick={(e) => e.stopPropagation()}
           >
-            <div className="flex items-start justify-between gap-4">
+            {/* Sticky header */}
+            <div className="flex items-start justify-between gap-4 border-b border-gray-100 px-6 py-4">
               <div>
                 <h2 className="text-lg font-semibold text-gray-900">UTM URLs</h2>
                 <p className="mt-0.5 text-sm text-gray-500">{viewUtmTarget.name}</p>
@@ -435,6 +512,9 @@ export default function CampaignsPage() {
               </button>
             </div>
 
+            {/* Scrollable body */}
+            <div className="flex-1 space-y-4 overflow-y-auto px-6 py-4">
+
             <div className="rounded-lg border border-gray-100 bg-gray-50 px-3 py-2 text-xs text-gray-600">
               <div>
                 <span className="text-gray-500">utm_source:</span>{' '}
@@ -450,13 +530,71 @@ export default function CampaignsPage() {
               </div>
             </div>
 
-            {([
-              ['Product page', viewUtmTarget.utm.product_page_url, viewUtmTarget.utm.product_page_utm_url],
-              ['Checkout', viewUtmTarget.utm.checkout_url, viewUtmTarget.utm.checkout_utm_url],
-              ['Purchase success', viewUtmTarget.utm.success_url, viewUtmTarget.utm.success_utm_url],
-            ] as const)
-              .filter(([, , generated]) => !!generated)
-              .map(([label, base, generated]) => (
+            {/* Per-subscriber preview input — stamps attora_sub=<id> on each URL */}
+            <div className="rounded-lg border border-blue-100 bg-blue-50 p-3">
+              <div className="mb-2 flex items-center justify-between gap-2">
+                <div>
+                  <div className="text-xs font-semibold uppercase tracking-wider text-blue-800">
+                    Preview as subscriber
+                  </div>
+                  <p className="mt-0.5 text-[11px] text-blue-700">
+                    Appends <span className="font-mono">attora_sub=&lt;id&gt;</span> to each URL
+                    — same stamping the AI does at reply time.
+                  </p>
+                </div>
+                {previewUtm && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setPreviewUtm(null);
+                      setPreviewSubscriberId('');
+                      setPreviewError('');
+                    }}
+                    className="shrink-0 rounded-md border border-blue-300 bg-white px-2 py-1 text-xs font-medium text-blue-700 hover:bg-blue-100"
+                  >
+                    Clear preview
+                  </button>
+                )}
+              </div>
+              <div className="flex items-center gap-2">
+                <input
+                  type="text"
+                  placeholder="subscriber id (e.g. ig_reply_check)"
+                  value={previewSubscriberId}
+                  onChange={(e) => setPreviewSubscriberId(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') void handlePreviewAsSubscriber();
+                  }}
+                  className="flex-1 rounded-md border border-blue-200 bg-white px-3 py-1.5 text-sm focus:border-blue-400 focus:outline-none focus:ring-1 focus:ring-blue-300"
+                />
+                <button
+                  type="button"
+                  onClick={() => void handlePreviewAsSubscriber()}
+                  disabled={previewLoading || !previewSubscriberId.trim()}
+                  className="shrink-0 rounded-md bg-blue-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {previewLoading ? 'Loading…' : 'Preview'}
+                </button>
+              </div>
+              {previewError && (
+                <div className="mt-2 text-xs text-red-700">{previewError}</div>
+              )}
+              {previewUtm && (
+                <div className="mt-2 text-[11px] font-medium text-blue-800">
+                  Showing URLs tagged for <span className="font-mono">{previewSubscriberId.trim()}</span>
+                </div>
+              )}
+            </div>
+
+            {(() => {
+              const src = previewUtm ?? viewUtmTarget.utm;
+              return ([
+                ['Product page', src.product_page_url, src.product_page_utm_url],
+                ['Checkout', src.checkout_url, src.checkout_utm_url],
+                ['Purchase success', src.success_url, src.success_utm_url],
+              ] as const)
+                .filter(([, , generated]) => !!generated)
+                .map(([label, base, generated]) => (
                 <div key={label} className="space-y-1 rounded-lg border border-gray-200 p-3">
                   <div className="text-xs font-semibold uppercase tracking-wider text-gray-500">
                     {label}
@@ -487,9 +625,12 @@ export default function CampaignsPage() {
                     </button>
                   </div>
                 </div>
-              ))}
+              ));
+            })()}
+            </div>
 
-            <div className="flex justify-end pt-1">
+            {/* Sticky footer */}
+            <div className="flex justify-end border-t border-gray-100 px-6 py-3">
               <button
                 type="button"
                 onClick={() => setViewUtmTarget(null)}

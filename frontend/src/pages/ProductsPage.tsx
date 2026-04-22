@@ -1,4 +1,5 @@
-import { useEffect, useState, useCallback } from 'react';
+import { useState } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   getProducts,
   createProduct,
@@ -13,9 +14,7 @@ import Button from '../components/ui/Button';
 import LoadingSpinner from '../components/ui/LoadingSpinner';
 
 export default function ProductsPage() {
-  const [products, setProducts] = useState<Product[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState('');
+  const queryClient = useQueryClient();
 
   // Modal state
   const [showForm, setShowForm] = useState(false);
@@ -26,35 +25,28 @@ export default function ProductsPage() {
 
   // Toast
   const [toast, setToast] = useState('');
+  const [error, setError] = useState('');
 
   function showToast(message: string) {
     setToast(message);
     setTimeout(() => setToast(''), 3000);
   }
 
-  const load = useCallback(async () => {
-    setLoading(true);
-    setError('');
-    try {
-      const result = await getProducts();
-      setProducts(result);
-    } catch {
-      setError('Failed to load products');
-    } finally {
-      setLoading(false);
-    }
-  }, []);
+  const { data: products = [], isLoading } = useQuery({
+    queryKey: ['products'],
+    queryFn: getProducts,
+  });
 
-  useEffect(() => {
-    load();
-  }, [load]);
+  function invalidateProducts() {
+    void queryClient.invalidateQueries({ queryKey: ['products'] });
+  }
 
   async function handleCreate(data: ProductCreate) {
     await createProduct(data);
     setShowForm(false);
     setEditingProduct(null);
     showToast('Product created successfully');
-    load();
+    invalidateProducts();
   }
 
   async function handleUpdate(data: ProductCreate) {
@@ -63,7 +55,7 @@ export default function ProductsPage() {
     setShowForm(false);
     setEditingProduct(null);
     showToast('Product updated successfully');
-    load();
+    invalidateProducts();
   }
 
   async function handleDelete() {
@@ -74,7 +66,7 @@ export default function ProductsPage() {
       setShowDeleteConfirm(false);
       setDeletingProduct(null);
       showToast('Product deleted successfully');
-      load();
+      invalidateProducts();
     } catch {
       setError('Failed to delete product');
     } finally {
@@ -86,7 +78,7 @@ export default function ProductsPage() {
     try {
       await updateProduct(product.id, { is_active: !product.is_active });
       showToast(`Product ${product.is_active ? 'deactivated' : 'activated'}`);
-      load();
+      invalidateProducts();
     } catch {
       setError('Failed to update product');
     }
@@ -127,7 +119,7 @@ export default function ProductsPage() {
         </div>
       )}
 
-      {loading ? (
+      {isLoading ? (
         <LoadingSpinner className="mt-12" />
       ) : (
         <ProductTable

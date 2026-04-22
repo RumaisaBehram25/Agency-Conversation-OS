@@ -1,7 +1,7 @@
-import { useEffect, useState, useCallback } from 'react';
+import { useState } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { AxiosError } from 'axios';
 import { getConversations, type ConversationFilters } from '../api/conversations';
-import type { ConversationListItem } from '../types';
 import ConversationList from '../components/conversations/ConversationList';
 import Select from '../components/ui/Select';
 import DateRangePicker from '../components/ui/DateRangePicker';
@@ -24,11 +24,7 @@ const channelOptions = [
 ];
 
 export default function ConversationsPage() {
-  const [conversations, setConversations] = useState<ConversationListItem[]>([]);
-  const [total, setTotal] = useState(0);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState('');
-
+  const queryClient = useQueryClient();
   const [filters, setFilters] = useState<ConversationFilters>({
     status: '',
     channel: '',
@@ -38,42 +34,38 @@ export default function ConversationsPage() {
     page_size: 20,
   });
 
-  const load = useCallback(async () => {
-    setLoading(true);
-    setError('');
-    try {
-      const result = await getConversations(filters);
-      setConversations(result.items);
-      setTotal(result.total);
-    } catch (err) {
-      if (err instanceof AxiosError) {
-        const detail = err.response?.data?.detail;
-        const status = err.response?.status;
-        setError(
-          `Failed to load conversations (${status ?? 'network'}): ${
-            typeof detail === 'string' ? detail : err.message
-          }`
-        );
-      } else {
-        setError('Failed to load conversations');
-      }
-      console.error('getConversations failed:', err);
-    } finally {
-      setLoading(false);
-    }
-  }, [filters]);
+  const { data, isLoading, error } = useQuery({
+    queryKey: ['conversations', filters],
+    queryFn: () => getConversations(filters),
+    placeholderData: (prev) => prev,
+  });
 
-  useEffect(() => {
-    load();
-  }, [load]);
+  const conversations = data?.items ?? [];
+  const total = data?.total ?? 0;
 
   function updateFilter(key: keyof ConversationFilters, value: string | number) {
     setFilters((prev) => ({
       ...prev,
       [key]: value,
-      ...(key !== 'page' ? { page: 1 } : {}), // Reset page on filter change
+      ...(key !== 'page' ? { page: 1 } : {}),
     }));
   }
+
+  function handleDeleted() {
+    void queryClient.invalidateQueries({ queryKey: ['conversations'] });
+  }
+
+  const errorMessage = (() => {
+    if (!error) return null;
+    if (error instanceof AxiosError) {
+      const detail = error.response?.data?.detail;
+      const status = error.response?.status;
+      return `Failed to load conversations (${status ?? 'network'}): ${
+        typeof detail === 'string' ? detail : error.message
+      }`;
+    }
+    return 'Failed to load conversations';
+  })();
 
   return (
     <div>
@@ -113,13 +105,13 @@ export default function ConversationsPage() {
       </div>
 
       {/* Content */}
-      {loading ? (
+      {isLoading && !data ? (
         <LoadingSpinner className="mt-12" />
-      ) : error ? (
-        <div className="mt-12 text-center text-red-600">{error}</div>
+      ) : errorMessage ? (
+        <div className="mt-12 text-center text-red-600">{errorMessage}</div>
       ) : (
         <>
-          <ConversationList conversations={conversations} />
+          <ConversationList conversations={conversations} onDeleted={handleDeleted} />
           <Pagination
             page={filters.page || 1}
             pageSize={filters.page_size || 20}

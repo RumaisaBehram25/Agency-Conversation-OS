@@ -52,9 +52,12 @@ async def _load_subscriber_tagged_urls(
     org_id: uuid.UUID,
     attora_campaign_id: str | None,
     subscriber_id: str,
+    attora_id: str | None = None,
 ) -> dict[str, str]:
     """
-    Look up the campaign's UTM URLs and stamp attora_sub=<subscriber_id> on each.
+    Look up the campaign's UTM URLs and stamp both attora_sub (ManyChat ID) and
+    attora_id (Attora's internal UUID) on each URL so the landing page can
+    attribute back via either identifier.
 
     Returns a dict with keys "product_page", "checkout", "success" — only entries
     with a configured URL are included. Non-fatal on any failure; returns {}.
@@ -76,7 +79,9 @@ async def _load_subscriber_tagged_urls(
         if campaign is None or campaign.utm is None:
             return {}
 
-        extra = {"attora_sub": subscriber_id}
+        extra: dict[str, str] = {"attora_sub": subscriber_id}
+        if attora_id:
+            extra["attora_id"] = attora_id
         tagged: dict[str, str] = {}
         if campaign.utm.product_page_utm_url:
             tagged["product_page"] = build_utm_url(
@@ -186,11 +191,13 @@ async def _run_pipeline(
 
     # ── Step 2.1: Stamp per-subscriber UTM URLs ────────────────
     # So the AI can quote an attribution link scoped to THIS lead.
+    # Stamps both attora_sub (ManyChat ID) and attora_id (Attora UUID).
     context.subscriber_tagged_urls = await _load_subscriber_tagged_urls(
         db=db,
         org_id=org_id,
         attora_campaign_id=context.subscriber.attora_campaign_id,
         subscriber_id=subscriber_id,
+        attora_id=context.subscriber.attora_id,
     )
 
     # ── Step 2.5: Retrieve knowledge (<1s via Haiku) ──────────

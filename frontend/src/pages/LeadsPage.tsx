@@ -1,6 +1,6 @@
-import { useEffect, useState, useCallback } from 'react';
+import { useState } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { getSubscribers, type SubscriberFilters } from '../api/subscribers';
-import type { SubscriberListItem } from '../types';
 import LeadList from '../components/leads/LeadList';
 import Select from '../components/ui/Select';
 import DateRangePicker from '../components/ui/DateRangePicker';
@@ -31,11 +31,7 @@ const conversionOptions = [
 ];
 
 export default function LeadsPage() {
-  const [leads, setLeads] = useState<SubscriberListItem[]>([]);
-  const [total, setTotal] = useState(0);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState('');
-
+  const queryClient = useQueryClient();
   const [filters, setFilters] = useState<SubscriberFilters & { is_converted_str?: string }>({
     buyer_stage: '',
     channel: '',
@@ -46,31 +42,24 @@ export default function LeadsPage() {
     is_converted_str: '',
   });
 
-  const load = useCallback(async () => {
-    setLoading(true);
-    setError('');
-    try {
-      const apiFilters: SubscriberFilters = {
-        ...filters,
-        is_converted: filters.is_converted_str === 'true'
-          ? true
-          : filters.is_converted_str === 'false'
-          ? false
-          : undefined,
-      };
-      const result = await getSubscribers(apiFilters);
-      setLeads(result.items);
-      setTotal(result.total);
-    } catch {
-      setError('Failed to load leads');
-    } finally {
-      setLoading(false);
-    }
-  }, [filters]);
+  const apiFilters: SubscriberFilters = {
+    ...filters,
+    is_converted:
+      filters.is_converted_str === 'true'
+        ? true
+        : filters.is_converted_str === 'false'
+        ? false
+        : undefined,
+  };
 
-  useEffect(() => {
-    load();
-  }, [load]);
+  const { data, isLoading, isError } = useQuery({
+    queryKey: ['subscribers', apiFilters],
+    queryFn: () => getSubscribers(apiFilters),
+    placeholderData: (prev) => prev, // show previous data while next page loads
+  });
+
+  const leads = data?.items ?? [];
+  const total = data?.total ?? 0;
 
   function updateFilter(key: string, value: string | number) {
     setFilters((prev) => ({
@@ -78,6 +67,10 @@ export default function LeadsPage() {
       [key]: value,
       ...(key !== 'page' ? { page: 1 } : {}),
     }));
+  }
+
+  function handleDeleted() {
+    void queryClient.invalidateQueries({ queryKey: ['subscribers'] });
   }
 
   return (
@@ -125,13 +118,13 @@ export default function LeadsPage() {
       </div>
 
       {/* Content */}
-      {loading ? (
+      {isLoading && !data ? (
         <LoadingSpinner className="mt-12" />
-      ) : error ? (
-        <div className="mt-12 text-center text-red-600">{error}</div>
+      ) : isError ? (
+        <div className="mt-12 text-center text-red-600">Failed to load leads</div>
       ) : (
         <>
-          <LeadList leads={leads} />
+          <LeadList leads={leads} onDeleted={handleDeleted} />
           <Pagination
             page={filters.page || 1}
             pageSize={filters.page_size || 20}

@@ -12,6 +12,7 @@ import json
 import logging
 
 from app.schemas.ai_engine import ConversationContext, OrgConfig
+from app.schemas.campaign import build_utm_url
 
 logger = logging.getLogger(__name__)
 
@@ -43,6 +44,8 @@ RESPONSE STYLE:
 def build_system_prompt(
     org_config: OrgConfig,
     subscriber_urls: dict[str, str] | None = None,
+    subscriber_id: str | None = None,
+    attora_id: str | None = None,
 ) -> list[dict]:
     """
     Build the system prompt as a list of content blocks for Claude.
@@ -63,6 +66,18 @@ def build_system_prompt(
         List of content block dicts for Claude's system parameter.
     """
     subscriber_urls = subscriber_urls or {}
+
+    # Identity params we stamp onto ANY URL the AI will quote so the landing
+    # page can attribute back. Empty if we don't have a subscriber context.
+    identity_stamp: dict[str, str] = {}
+    if subscriber_id:
+        identity_stamp["attora_sub"] = subscriber_id
+    if attora_id:
+        identity_stamp["attora_id"] = attora_id
+
+    def _stamp_product_url(url: str) -> str:
+        """Add attora_sub + attora_id to a product-specific URL."""
+        return build_utm_url(url, identity_stamp) if identity_stamp else url
     sections: list[str] = []
 
     # Section 1: Base Persona
@@ -95,11 +110,14 @@ def build_system_prompt(
                 entry += f" — {p.currency} {p.price:.2f}"
             if p.description:
                 entry += f"\n  {p.description}"
-            # Prefer the per-subscriber attribution-tagged URL so the AI
-            # quotes a link that attributes back to this specific lead.
-            checkout_url = tagged_checkout or p.checkout_url
-            if checkout_url:
-                entry += f"\n  Checkout: {checkout_url}"
+            # Prefer the product's own checkout URL (stamped with identity
+            # params) so multi-product catalogs get per-product links. Fall
+            # back to the campaign-level tagged URL only if the product has
+            # no URL of its own.
+            if p.checkout_url:
+                entry += f"\n  Checkout: {_stamp_product_url(p.checkout_url)}"
+            elif tagged_checkout:
+                entry += f"\n  Checkout: {tagged_checkout}"
             if tagged_product_page:
                 entry += f"\n  Product page: {tagged_product_page}"
             if p.eligibility_criteria:

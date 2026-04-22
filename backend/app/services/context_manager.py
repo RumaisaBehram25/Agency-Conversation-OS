@@ -127,6 +127,7 @@ async def load_conversation_context(
     # ── Step 4: Build context ──────────────────────────────────
     sub_context = SubscriberContext(
         subscriber_id=subscriber_id,
+        attora_id=str(subscriber.id),
         first_name=subscriber.first_name,
         last_name=subscriber.last_name,
         buyer_stage=subscriber.buyer_stage.value if subscriber.buyer_stage else "awareness",

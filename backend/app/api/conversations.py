@@ -80,6 +80,8 @@ async def list_conversations(
     Includes subscriber name, last message preview, buyer stage, and message count.
     """
     # Base query
+    activity_ts = func.coalesce(Conversation.last_activity_at, Conversation.created_at)
+
     query = (
         select(Conversation)
         .where(Conversation.org_id == org_id)
@@ -109,12 +111,12 @@ async def list_conversations(
 
     if date_from:
         query = query.where(
-            Conversation.created_at >= datetime(date_from.year, date_from.month, date_from.day, tzinfo=timezone.utc)
+            activity_ts >= datetime(date_from.year, date_from.month, date_from.day, tzinfo=timezone.utc)
         )
 
     if date_to:
         query = query.where(
-            Conversation.created_at < datetime(date_to.year, date_to.month, date_to.day, 23, 59, 59, tzinfo=timezone.utc)
+            activity_ts <= datetime(date_to.year, date_to.month, date_to.day, 23, 59, 59, tzinfo=timezone.utc)
         )
 
     # Count total
@@ -130,11 +132,11 @@ async def list_conversations(
         count_query = count_query.where(Conversation.channel == ChannelType(channel))
     if date_from:
         count_query = count_query.where(
-            Conversation.created_at >= datetime(date_from.year, date_from.month, date_from.day, tzinfo=timezone.utc)
+            activity_ts >= datetime(date_from.year, date_from.month, date_from.day, tzinfo=timezone.utc)
         )
     if date_to:
         count_query = count_query.where(
-            Conversation.created_at < datetime(date_to.year, date_to.month, date_to.day, 23, 59, 59, tzinfo=timezone.utc)
+            activity_ts <= datetime(date_to.year, date_to.month, date_to.day, 23, 59, 59, tzinfo=timezone.utc)
         )
 
     total_result = await db.execute(count_query)
@@ -147,17 +149,39 @@ async def list_conversations(
     result = await db.execute(query)
     conversations = result.scalars().all()
 
+    # Fetch last message previews for all conversations in one query (avoid N+1).
+    last_message_by_conversation_id: dict[uuid.UUID, str] = {}
+    if conversations:
+        conversation_ids = [conv.id for conv in conversations]
+        latest_message_subquery = (
+            select(
+                Message.conversation_id.label("conversation_id"),
+                Message.content.label("content"),
+                func.row_number().over(
+                    partition_by=Message.conversation_id,
+                    order_by=Message.created_at.desc(),
+                ).label("rn"),
+            )
+            .where(Message.conversation_id.in_(conversation_ids))
+            .subquery()
+        )
+
+        latest_messages_result = await db.execute(
+            select(
+                latest_message_subquery.c.conversation_id,
+                latest_message_subquery.c.content,
+            ).where(latest_message_subquery.c.rn == 1)
+        )
+        last_message_by_conversation_id = {
+            row.conversation_id: row.content
+            for row in latest_messages_result
+            if row.content is not None
+        }
+
     # Build response items with last message preview
     items = []
     for conv in conversations:
-        # Fetch last message preview
-        last_msg_result = await db.execute(
-            select(Message.content)
-            .where(Message.conversation_id == conv.id)
-            .order_by(Message.created_at.desc())
-            .limit(1)
-        )
-        last_message = last_msg_result.scalar_one_or_none()
+        last_message = last_message_by_conversation_id.get(conv.id)
         last_message_preview = last_message[:100] if last_message else None
 
         subscriber = conv.subscriber

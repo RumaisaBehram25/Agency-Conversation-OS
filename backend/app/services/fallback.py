@@ -34,7 +34,7 @@ class FallbackType(str, Enum):
 
 _FALLBACK_RESPONSES: dict[FallbackType, dict] = {
     FallbackType.GREETING: {
-        "text": "Hey there! Thanks for reaching out. How can I help you today?",
+        "text": "Hey! What are you looking to work on — energy, weight, hormones?",
         "quick_replies": ["Tell me about your products", "I have a question", "Talk to a human"],
     },
     FallbackType.TIMEOUT: {
@@ -42,7 +42,7 @@ _FALLBACK_RESPONSES: dict[FallbackType, dict] = {
         "quick_replies": ["Take your time", "Can I talk to someone?"],
     },
     FallbackType.BUYING_TIME: {
-        "text": "Great question! Let me pull up the details on that for you. One moment please.",
+        "text": "Give me one sec, looking that up for you!",
         "quick_replies": ["Sure, no rush", "I have another question"],
     },
     FallbackType.ERROR: {

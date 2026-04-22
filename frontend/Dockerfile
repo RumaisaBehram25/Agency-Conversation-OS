@@ -1,35 +1,23 @@
-# ============================================
-# Attora Frontend — Multi-stage Docker Build
-# Stage 1: Build React app with Node
-# Stage 2: Serve with nginx
-# ============================================
-
-# ─── Stage 1: Build ──────────────────────────
-FROM node:20-alpine AS builder
+﻿FROM node:20-slim AS builder
 
 WORKDIR /app
 
-# Install dependencies first for better caching
-COPY package.json ./
-RUN npm config set fetch-retry-mintimeout 20000 && \
-    npm config set fetch-retry-maxtimeout 120000 && \
-    npm config set fetch-retries 5 && \
-    npm install --legacy-peer-deps
+COPY package.json package-lock.json ./
 
-# Copy source and build
+RUN npm install --legacy-peer-deps
+
 COPY . .
+
+RUN npm install
 RUN npm run build
 
-# ─── Stage 2: Serve ──────────────────────────
+
 FROM nginx:1.27-alpine
 
-# Remove default nginx config
 RUN rm /etc/nginx/conf.d/default.conf
 
-# Copy custom nginx config
 COPY nginx.conf /etc/nginx/conf.d/default.conf
 
-# Copy built assets from builder stage
 COPY --from=builder /app/dist /usr/share/nginx/html
 
 EXPOSE 80

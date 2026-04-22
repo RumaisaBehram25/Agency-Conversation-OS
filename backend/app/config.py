@@ -24,11 +24,14 @@ class Settings(BaseSettings):
     app_name: str = "Attora"
     app_env: str = "development"
     debug: bool = True
+    # When False and debug is False, /api/docs and /api/openapi.json are not mounted.
+    # Set EXPOSE_API_DOCS=true on staging or internal servers to enable Swagger without DEBUG.
+    expose_api_docs: bool = False
     log_level: str = "INFO"
 
     # ── Database ─────────────────────────────────────────────
-    database_url: str = "postgresql+asyncpg://attora:attora_dev@postgres:5432/attora"
-    database_url_sync: str = "postgresql://attora:attora_dev@postgres:5432/attora"
+    database_url: str = "postgresql+asyncpg://attora:Attora-123@attora-db.cp8ooqrtonyo.us-east-1.rds.amazonaws.com:5432/attora"
+    database_url_sync: str = "postgresql://attora:Attora-123@attora-db.cp8ooqrtonyo.us-east-1.rds.amazonaws.com:5432/attora"
 
     # ── Redis ────────────────────────────────────────────────
     redis_url: str = "redis://redis:6379/0"

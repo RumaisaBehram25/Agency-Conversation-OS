@@ -64,13 +64,14 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
 # ── App ──────────────────────────────────────────────────────
 
+_docs_enabled = settings.debug or settings.expose_api_docs
 app = FastAPI(
     title=settings.app_name,
     description="White-Labeled ManyChat Platform with AI Conversation Engine",
     version="1.0.0",
-    docs_url="/api/docs" if settings.debug else None,
-    redoc_url="/api/redoc" if settings.debug else None,
-    openapi_url="/api/openapi.json" if settings.debug else None,
+    docs_url="/api/docs" if _docs_enabled else None,
+    redoc_url="/api/redoc" if _docs_enabled else None,
+    openapi_url="/api/openapi.json" if _docs_enabled else None,
     lifespan=lifespan,
 )
 

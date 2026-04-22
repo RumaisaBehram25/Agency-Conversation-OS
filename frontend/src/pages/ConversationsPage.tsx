@@ -1,6 +1,7 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { AxiosError } from 'axios';
+import { useSearchParams } from 'react-router-dom';
 import { getConversations, type ConversationFilters } from '../api/conversations';
 import ConversationList from '../components/conversations/ConversationList';
 import Select from '../components/ui/Select';
@@ -25,13 +26,14 @@ const channelOptions = [
 
 export default function ConversationsPage() {
   const queryClient = useQueryClient();
+  const [searchParams, setSearchParams] = useSearchParams();
   const [filters, setFilters] = useState<ConversationFilters>({
-    status: '',
-    channel: '',
-    date_from: daysAgoISO(30),
-    date_to: todayISO(),
-    page: 1,
-    page_size: 20,
+    status: searchParams.get('status') || '',
+    channel: searchParams.get('channel') || '',
+    date_from: searchParams.get('date_from') || daysAgoISO(30),
+    date_to: searchParams.get('date_to') || todayISO(),
+    page: Number(searchParams.get('page') || 1),
+    page_size: Number(searchParams.get('page_size') || 20),
   });
 
   const { data, isLoading, error } = useQuery({
@@ -39,6 +41,17 @@ export default function ConversationsPage() {
     queryFn: () => getConversations(filters),
     placeholderData: (prev) => prev,
   });
+
+  useEffect(() => {
+    const params = new URLSearchParams();
+    if (filters.status) params.set('status', filters.status);
+    if (filters.channel) params.set('channel', filters.channel);
+    if (filters.date_from) params.set('date_from', filters.date_from);
+    if (filters.date_to) params.set('date_to', filters.date_to);
+    if (filters.page) params.set('page', String(filters.page));
+    if (filters.page_size) params.set('page_size', String(filters.page_size));
+    setSearchParams(params, { replace: true });
+  }, [filters, setSearchParams]);
 
   const conversations = data?.items ?? [];
   const total = data?.total ?? 0;

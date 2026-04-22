@@ -530,7 +530,7 @@ async def _load_message_history(
         select(Message)
         .where(Message.conversation_id == conversation_id)
         .order_by(Message.created_at.desc())
-        .limit(10)
+        .limit(20)
     )
     messages = result.scalars().all()
 

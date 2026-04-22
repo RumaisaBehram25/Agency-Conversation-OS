@@ -24,13 +24,15 @@ export default function ROIWaterfall({ roi }: ROIWaterfallProps) {
     { name: 'Revenue', value: roi.revenue, color: '#16a34a', displayValue: formatCurrency(roi.revenue) },
   ];
 
-  // Normalize to percentages for chart visualization
-  const maxVal = Math.max(...waterfallSteps.map((s) => Math.abs(s.value)), 1);
+  // Use a logarithmic scale (log10) for visualization so small counts (Conversations) 
+  // aren't completely squashed by large dollar amounts (Ad Spend).
+  const maxLog = Math.max(...waterfallSteps.map((s) => Math.log10(Math.abs(s.value) + 1)), 1);
   const chartData = waterfallSteps.map((step) => ({
     name: step.name,
-    value: (Math.abs(step.value) / maxVal) * 100,
+    value: (Math.log10(Math.abs(step.value) + 1) / maxLog) * 100,
     color: step.color,
     displayValue: step.displayValue,
+    rawValue: step.value,
   }));
 
   return (
@@ -57,7 +59,7 @@ export default function ROIWaterfall({ roi }: ROIWaterfallProps) {
                 border: '1px solid #e5e7eb',
               }}
             />
-            <Bar dataKey="value" radius={[4, 4, 0, 0]}>
+            <Bar dataKey="value" radius={[4, 4, 0, 0]} minPointSize={2}>
               {chartData.map((entry, index) => (
                 <Cell key={`cell-${index}`} fill={entry.color} />
               ))}

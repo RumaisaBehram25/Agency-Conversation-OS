@@ -1,8 +1,7 @@
 # ============================================
-# Attora Backend — Multi-stage Dockerfile
+# Attora Backend — Multi-stage Dockerfile (Optimized)
 # ============================================
 
-# ── Stage 1: Base ────────────────────────────
 FROM python:3.12-slim AS base
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
@@ -12,23 +11,35 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
-# Install system dependencies for asyncpg and bcrypt
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends \
-        libpq-dev \
-        gcc \
+
+# ── System dependencies ───────────────────────
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libpq-dev \
+    gcc \
     && rm -rf /var/lib/apt/lists/*
 
-# ── Stage 2: Dependencies ────────────────────
+
+# ── Dependencies stage ───────────────────────
 FROM base AS dependencies
 
+RUN pip install --upgrade pip setuptools wheel
+
 COPY requirements.txt .
+
 RUN pip install --no-cache-dir -r requirements.txt
 
-# ── Stage 3: Application ─────────────────────
+
+# ── Application stage ────────────────────────
 FROM dependencies AS application
 
-COPY . .
+WORKDIR /app
+
+# Copy only required backend code
+COPY app ./app
+COPY alembic ./alembic
+
+# If you use alembic config file, ensure it's included
+COPY alembic.ini ./
 
 EXPOSE 8000
 

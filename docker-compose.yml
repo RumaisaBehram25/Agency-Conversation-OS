@@ -6,9 +6,16 @@ services:
       dockerfile: Dockerfile
     ports:
       - "8000:8000"
+    # Explicit DB URLs here ensure containers use the configured external RDS instance.
+    environment:
+      DATABASE_URL: postgresql+asyncpg://attora:Attora-123@attora-db.cp8ooqrtonyo.us-east-1.rds.amazonaws.com:5432/attora
+      DATABASE_URL_SYNC: postgresql://attora:Attora-123@attora-db.cp8ooqrtonyo.us-east-1.rds.amazonaws.com:5432/attora
+      REDIS_URL: redis://redis:6379/0
     env_file:
       - .env
     depends_on:
+      postgres:
+        condition: service_healthy
       redis:
         condition: service_healthy
     networks:
@@ -31,6 +38,8 @@ services:
     env_file:
       - .env
     depends_on:
+      postgres:
+        condition: service_healthy
       redis:
         condition: service_healthy
       minio:
@@ -54,6 +63,26 @@ services:
     networks:
       - attora-net
     restart: unless-stopped
+
+  # ─── PostgreSQL 16 ─────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-attora}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-Attora-123}
+      POSTGRES_DB: ${POSTGRES_DB:-attora}
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    networks:
+      - attora-net
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-attora} -d ${POSTGRES_DB:-attora}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
 
   # ─── Redis 7 ───────────────────────────────────────────────
   redis:
@@ -169,6 +198,7 @@ services:
       retries: 12
 
 volumes:
+  postgres-data:
   redis-data:
   minio-data:
 

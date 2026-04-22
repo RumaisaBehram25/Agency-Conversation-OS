@@ -29,7 +29,7 @@ logger = logging.getLogger(__name__)
 
 # Model configuration
 _CLASSIFIER_MODEL = "claude-haiku-4-5-20251001"
-_CLASSIFIER_TIMEOUT_SECONDS = 0.5  # 500ms budget
+_CLASSIFIER_TIMEOUT_SECONDS = 2.0  # 2s budget (was 500ms — too tight, caused fallbacks)
 _MAX_TOKENS = 256
 
 # Classification system prompt
@@ -192,9 +192,18 @@ def _fallback_classification(message: str) -> ClassificationResult:
             confidence=0.7,
         )
 
+    # Price / cost questions — these are questions, NOT purchase intent
+    price_words = {"price", "cost", "how much", "pricing"}
+    if any(word in msg_lower for word in price_words):
+        return ClassificationResult(
+            intent=IntentType.QUESTION,
+            is_simple=False,
+            confidence=0.6,
+        )
+
     # Purchase intent signals
-    purchase_words = {"buy", "purchase", "order", "checkout", "price", "cost",
-                      "how much", "payment", "pay"}
+    purchase_words = {"buy", "purchase", "order", "checkout", "payment", "pay",
+                      "grab it", "get it", "sign up"}
     if any(word in msg_lower for word in purchase_words):
         return ClassificationResult(
             intent=IntentType.PURCHASE_INTENT,

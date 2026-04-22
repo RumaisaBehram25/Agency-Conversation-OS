@@ -1,6 +1,8 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { Link } from 'react-router-dom';
 import { getAnalytics, getROI, getAIPerformance, getExportUrl } from '../api/analytics';
+import { getConversations } from '../api/conversations';
 import { getCampaigns } from '../api/campaigns';
 import { syncMetaNow } from '../api/settings';
 import type { CampaignSummary } from '../types';
@@ -30,7 +32,6 @@ export default function AnalyticsPage() {
   const [dateFrom, setDateFrom] = useState(daysAgoISO(30));
   const [dateTo, setDateTo] = useState(todayISO());
   const [selectedCampaign, setSelectedCampaign] = useState<string>('');
-
   const [syncing, setSyncing] = useState(false);
   const [syncStatus, setSyncStatus] = useState<string | null>(null);
   const [syncProgress, setSyncProgress] = useState(0);
@@ -58,16 +59,21 @@ export default function AnalyticsPage() {
     queryKey: ['ai-performance', dateRange],
     queryFn: () => getAIPerformance(dateRange),
   });
+  const conversationsQuery = useQuery({
+    queryKey: ['conversations-count', dateRange],
+    queryFn: () => getConversations({ ...dateRange, page: 1, page_size: 1 }),
+  });
 
   const analytics = analyticsQuery.data ?? null;
   const roi = roiQuery.data ?? null;
   const aiPerf = aiPerfQuery.data ?? null;
+  const conversationsTotal = conversationsQuery.data?.total ?? null;
   const loading =
-    analyticsQuery.isLoading || roiQuery.isLoading || aiPerfQuery.isLoading;
+    analyticsQuery.isLoading || roiQuery.isLoading || aiPerfQuery.isLoading || conversationsQuery.isLoading;
   const isFirstLoad =
     loading && (!analytics || !roi || !aiPerf);
   const error =
-    analyticsQuery.isError || roiQuery.isError || aiPerfQuery.isError
+    analyticsQuery.isError || roiQuery.isError || aiPerfQuery.isError || conversationsQuery.isError
       ? 'Failed to load analytics data'
       : '';
 
@@ -76,6 +82,7 @@ export default function AnalyticsPage() {
       queryClient.invalidateQueries({ queryKey: ['analytics', dateRange] }),
       queryClient.invalidateQueries({ queryKey: ['roi', dateRange] }),
       queryClient.invalidateQueries({ queryKey: ['ai-performance', dateRange] }),
+      queryClient.invalidateQueries({ queryKey: ['conversations-count', dateRange] }),
       queryClient.invalidateQueries({ queryKey: ['campaigns-for-analytics', dateRange] }),
     ]);
   }, [queryClient, dateRange]);
@@ -254,7 +261,15 @@ export default function AnalyticsPage() {
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
               <div className="card text-center">
                 <p className="text-xs text-gray-500 uppercase tracking-wider">Total Conversations</p>
-                <p className="mt-1 text-2xl font-bold text-gray-900">{analytics.total_conversations}</p>
+                <p className="mt-1 text-2xl font-bold text-gray-900">
+                  {conversationsTotal ?? analytics.total_conversations}
+                </p>
+                <Link
+                  to={`/conversations?date_from=${encodeURIComponent(dateFrom)}&date_to=${encodeURIComponent(dateTo)}`}
+                  className="mt-2 inline-block text-xs font-medium text-primary-700 hover:text-primary-800"
+                >
+                  View conversations
+                </Link>
               </div>
               <div className="card text-center">
                 <p className="text-xs text-gray-500 uppercase tracking-wider">Total Conversions</p>

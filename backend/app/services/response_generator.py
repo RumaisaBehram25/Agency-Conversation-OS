@@ -30,7 +30,7 @@ logger = logging.getLogger(__name__)
 
 # Model configuration
 _RESPONSE_MODEL = "claude-sonnet-4-6"
-_RESPONSE_TIMEOUT_SECONDS = 7.0  # 7s hard timeout
+_RESPONSE_TIMEOUT_SECONDS = 12.0  # 12s hard timeout
 _MAX_TOKENS = 1024
 
 

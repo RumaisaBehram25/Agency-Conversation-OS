@@ -60,7 +60,7 @@ async def get_analytics(
         ).where(and_(*filters))
     )
     row = agg_result.one()
-    total_conversations = int(row.total_conversations)
+    total_conversations = await _count_conversations_raw(db, org_id, date_from, date_to, channel)
     total_conversions = int(row.total_conversions)
     total_revenue = float(row.total_revenue)
     total_ad_spend = float(row.total_ad_spend)
@@ -226,7 +226,6 @@ async def get_roi(
     agg_result = await db.execute(
         select(
             func.coalesce(func.sum(DailyAnalytics.ad_spend), 0).label("ad_spend"),
-            func.coalesce(func.sum(DailyAnalytics.new_conversations), 0).label("conversations_count"),
             func.coalesce(func.sum(DailyAnalytics.conversions), 0).label("converted_count"),
             func.coalesce(func.sum(DailyAnalytics.conversion_value), 0).label("revenue"),
         ).where(and_(*filters))
@@ -234,7 +233,7 @@ async def get_roi(
     row = agg_result.one()
 
     ad_spend = float(row.ad_spend)
-    conversations_count = int(row.conversations_count)
+    conversations_count = await _count_conversations_raw(db, org_id, date_from, date_to)
     converted_count = int(row.converted_count)
     revenue = float(row.revenue)
 
@@ -378,6 +377,39 @@ async def get_ai_performance(
         total_ai_tokens=total_ai_tokens,
         total_ai_cost=total_ai_cost,
     )
+
+
+async def _count_conversations_raw(
+    db: AsyncSession,
+    org_id: uuid.UUID,
+    date_from: date,
+    date_to: date,
+    channel: str | None = None,
+) -> int:
+    """Count conversations directly from the conversations table for consistency with /api/conversations."""
+    dt_from = datetime(date_from.year, date_from.month, date_from.day, tzinfo=timezone.utc)
+    dt_to = datetime(date_to.year, date_to.month, date_to.day, 23, 59, 59, tzinfo=timezone.utc)
+
+    activity_ts = func.coalesce(Conversation.last_activity_at, Conversation.created_at)
+
+    query = (
+        select(func.count())
+        .select_from(Conversation)
+        .where(
+            Conversation.org_id == org_id,
+            activity_ts >= dt_from,
+            activity_ts <= dt_to,
+        )
+    )
+
+    if channel and channel != "all":
+        try:
+            query = query.where(Conversation.channel == ChannelType(channel))
+        except ValueError:
+            pass
+
+    result = await db.execute(query)
+    return int(result.scalar() or 0)
 
 
 async def get_dashboard_overview(

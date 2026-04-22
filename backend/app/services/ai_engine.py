@@ -28,7 +28,6 @@ from sqlalchemy.orm import selectinload
 
 from app.models.campaign import AdCampaign
 from app.schemas.ai_engine import AIResponse, IntentType
-from app.schemas.campaign import build_utm_url
 from app.services.buyer_stage import classify_buyer_stage
 from app.services.classifier import classify_message
 from app.services.config_loader import load_org_config
@@ -44,7 +43,51 @@ from app.services.response_generator import generate_response
 logger = logging.getLogger(__name__)
 
 # Total pipeline time budget
-_TOTAL_TIMEOUT_SECONDS = 10.0
+_TOTAL_TIMEOUT_SECONDS = 15.0
+
+_PURCHASE_LINK_HINTS = (
+    "buy",
+    "purchase",
+    "checkout",
+    "success",
+    "link",
+    "payment",
+    "grab it",
+    "how do i buy",
+)
+
+# When the message is ONLY about price, do NOT inject a purchase link.
+_PRICE_ONLY_HINTS = (
+    "price",
+    "cost",
+    "how much",
+    "pricing",
+    "what does it cost",
+    "what's the price",
+)
+
+_SUCCESS_LINK_HINTS = (
+    "success",
+    "purchase success",
+    "confirmation",
+    "thank you page",
+)
+
+_CHECKOUT_LINK_HINTS = (
+    "checkout",
+    "buy",
+    "purchase",
+    "payment",
+    "order",
+    "grab it",
+)
+
+_PRODUCT_LINK_HINTS = (
+    "product",
+    "products",
+    "program",
+    "urls",
+)
 
 
 async def _load_subscriber_tagged_urls(
@@ -55,43 +98,67 @@ async def _load_subscriber_tagged_urls(
     attora_id: str | None = None,
 ) -> dict[str, str]:
     """
-    Look up the campaign's UTM URLs and stamp both attora_sub (ManyChat ID) and
-    attora_id (Attora's internal UUID) on each URL so the landing page can
-    attribute back via either identifier.
+    Look up the campaign's clean base URLs (no UTM parameters).
 
     Returns a dict with keys "product_page", "checkout", "success" — only entries
     with a configured URL are included. Non-fatal on any failure; returns {}.
     """
-    if db is None or not attora_campaign_id:
-        return {}
-    try:
-        campaign_uuid = uuid.UUID(attora_campaign_id)
-    except (ValueError, TypeError):
+    if db is None:
         return {}
 
+    campaign_uuid: uuid.UUID | None = None
+    if attora_campaign_id:
+        try:
+            campaign_uuid = uuid.UUID(attora_campaign_id)
+        except (ValueError, TypeError):
+            campaign_uuid = None
+
     try:
-        result = await db.execute(
+        # Primary: use subscriber-attributed campaign when present.
+        query = (
             select(AdCampaign)
-            .where(AdCampaign.id == campaign_uuid, AdCampaign.org_id == org_id)
+            .where(
+                AdCampaign.org_id == org_id,
+                AdCampaign.is_active.is_(True),
+                AdCampaign.is_attora_managed.is_(True),
+            )
             .options(selectinload(AdCampaign.utm))
+            .order_by(AdCampaign.created_at.desc())
         )
+        if campaign_uuid is not None:
+            query = query.where(AdCampaign.id == campaign_uuid)
+
+        result = await db.execute(query.limit(1))
         campaign = result.scalar_one_or_none()
+
+        # Fallback: most recent active managed campaign with UTM configured.
+        if campaign is None or campaign.utm is None:
+            fallback_result = await db.execute(
+                select(AdCampaign)
+                .where(
+                    AdCampaign.org_id == org_id,
+                    AdCampaign.is_active.is_(True),
+                    AdCampaign.is_attora_managed.is_(True),
+                )
+                .options(selectinload(AdCampaign.utm))
+                .order_by(AdCampaign.created_at.desc())
+                .limit(10)
+            )
+            candidates = fallback_result.scalars().all()
+            campaign = next((c for c in candidates if c.utm is not None), None)
+
         if campaign is None or campaign.utm is None:
             return {}
 
-        extra: dict[str, str] = {"attora_sub": subscriber_id}
-        if attora_id:
-            extra["attora_id"] = attora_id
-        tagged: dict[str, str] = {}
-        if campaign.utm.product_page_utm_url:
-            tagged["product_page"] = build_utm_url(
-                campaign.utm.product_page_utm_url, extra
-            )
-        if campaign.utm.checkout_utm_url:
-            tagged["checkout"] = build_utm_url(campaign.utm.checkout_utm_url, extra)
-        if campaign.utm.success_utm_url:
-            tagged["success"] = build_utm_url(campaign.utm.success_utm_url, extra)
-        return tagged
+        # Return clean base URLs — no UTM params.
+        urls: dict[str, str] = {}
+        if campaign.utm.product_page_url:
+            urls["product_page"] = campaign.utm.product_page_url
+        if campaign.utm.checkout_url:
+            urls["checkout"] = campaign.utm.checkout_url
+        if campaign.utm.success_url:
+            urls["success"] = campaign.utm.success_url
+        return urls
     except Exception as e:
         logger.warning(
             "Failed to load per-subscriber UTM URLs for campaign %s: %s",
@@ -298,6 +365,14 @@ async def _run_pipeline(
             set(ai_response.intent_signals + stage_result.signals)
         )
 
+    # Ensure we always include an actual campaign URL when the user asks to buy/get link.
+    _inject_purchase_link_if_needed(
+        ai_response=ai_response,
+        message=message,
+        intent=classification.intent,
+        subscriber_tagged_urls=context.subscriber_tagged_urls,
+    )
+
     # ── Total pipeline time ────────────────────────────────────
     ai_response.response_time_ms = int(
         (time.monotonic() - pipeline_start) * 1000
@@ -332,6 +407,67 @@ async def _run_pipeline(
     return ai_response
 
 
+def _inject_purchase_link_if_needed(
+    ai_response: AIResponse,
+    message: str,
+    intent: IntentType,
+    subscriber_tagged_urls: dict[str, str] | None,
+) -> None:
+    """Inject requested campaign URL (product/checkout/success) for buy/link intents."""
+    text = (ai_response.response_text or "").strip()
+    msg = (message or "").lower()
+
+    # Skip if the customer is only asking about price/cost — no link needed.
+    is_price_only = any(hint in msg for hint in _PRICE_ONLY_HINTS)
+    if is_price_only:
+        return
+
+    is_buy_or_link_request = (
+        intent == IntentType.PURCHASE_INTENT
+        or any(hint in msg for hint in _PURCHASE_LINK_HINTS)
+    )
+    if not is_buy_or_link_request:
+        return
+
+    urls = subscriber_tagged_urls or {}
+    if not urls:
+        return
+
+    # Collect all available clean URLs not already in the response.
+    label_map = [
+        ("product_page", "Product page URL"),
+        ("checkout", "Checkout URL"),
+        ("success", "Purchase success URL"),
+    ]
+    missing: list[str] = []
+    for key, label in label_map:
+        url = urls.get(key)
+        if url and url not in text:
+            missing.append(f"{label}\n{url}")
+
+    if not missing:
+        return
+
+    links_text = "\n\n".join(missing)
+    if text:
+        ai_response.response_text = f"{text}\n\n{links_text}"
+    else:
+        ai_response.response_text = links_text
+
+    ai_response.conversion_ready = True
+
+
+def _infer_requested_link_type(message_lower: str) -> str:
+    """Infer which URL type the customer asked for: success, checkout, or product."""
+    if any(h in message_lower for h in _SUCCESS_LINK_HINTS):
+        return "success"
+    if any(h in message_lower for h in _CHECKOUT_LINK_HINTS):
+        return "checkout"
+    if any(h in message_lower for h in _PRODUCT_LINK_HINTS):
+        return "product"
+    return "checkout"
+
+
 def _route_simple_intent(
     intent: IntentType,
     org_config,
@@ -343,10 +479,15 @@ def _route_simple_intent(
     Returns None if the intent should be handled by the full Sonnet pipeline.
     """
     if intent == IntentType.GREETING:
-        return get_fallback_response(
-            FallbackType.GREETING,
-            custom_greeting=org_config.ai_config.greeting_message,
-        )
+        # Only use the canned greeting for the VERY FIRST message.
+        # Mid-conversation short replies like "Maggie" or "Yes, Nikkiey!"
+        # can be misclassified as greetings — send those to Sonnet instead.
+        if context.subscriber.total_messages <= 1 and not context.history:
+            return get_fallback_response(
+                FallbackType.GREETING,
+                custom_greeting=org_config.ai_config.greeting_message,
+            )
+        return None  # Let Sonnet handle with full conversation context.
 
     if intent == IntentType.SPAM:
         return get_fallback_response(FallbackType.SPAM)

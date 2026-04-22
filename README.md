@@ -478,10 +478,10 @@ Static assets are cached with `Cache-Control: immutable` (1 year). Gzip compress
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `DATABASE_URL` | `postgresql+asyncpg://attora:attora_dev@postgres:5432/attora` | Async Postgres connection |
-| `DATABASE_URL_SYNC` | `postgresql://attora:attora_dev@postgres:5432/attora` | Sync connection (Alembic) |
+| `DATABASE_URL` | `postgresql+asyncpg://attora:Attora-123@attora-db.cp8ooqrtonyo.us-east-1.rds.amazonaws.com:5432/attora` | Async Postgres connection |
+| `DATABASE_URL_SYNC` | `postgresql://attora:Attora-123@attora-db.cp8ooqrtonyo.us-east-1.rds.amazonaws.com:5432/attora` | Sync connection (Alembic) |
 | `POSTGRES_USER` | `attora` | Postgres user |
-| `POSTGRES_PASSWORD` | `attora_dev` | Postgres password |
+| `POSTGRES_PASSWORD` | `Attora-123` | Postgres password |
 | `POSTGRES_DB` | `attora` | Postgres database name |
 | `REDIS_URL` | `redis://redis:6379/0` | Redis connection |
 | `JWT_SECRET_KEY` | `change-me-...` | **Must change.** JWT signing secret (32+ chars) |

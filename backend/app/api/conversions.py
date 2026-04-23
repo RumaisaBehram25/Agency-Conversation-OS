@@ -34,6 +34,7 @@ from app.models.conversion import ConversionEvent
 from app.models.organization import Organization
 from app.models.subscriber import Subscriber
 from app.security.encryption import decrypt_value
+from app.services.hyros_service import sync_single_subscriber_hyros_purchase
 
 logger = logging.getLogger(__name__)
 
@@ -172,6 +173,12 @@ async def track_conversion(
             "Skipping CAPI dispatch for org=%s: pixel/token not configured", org_id
         )
 
+    background_tasks.add_task(
+        _dispatch_hyros_sync,
+        org_id=org_id,
+        subscriber_id=subscriber.id,
+    )
+
     return ConversionTrackResponse(
         conversion_event_id=event.id,
         capi_event_queued=capi_queued,
@@ -277,3 +284,14 @@ async def _dispatch_capi_event(
         conversion_type.value,
         events,
     )
+
+
+async def _dispatch_hyros_sync(*, org_id: uuid.UUID, subscriber_id: uuid.UUID) -> None:
+    """Best-effort Hyros sync for the converted subscriber."""
+    async with async_session_factory() as session:
+        await sync_single_subscriber_hyros_purchase(
+            session,
+            org_id=org_id,
+            subscriber_id=subscriber_id,
+        )
+        await session.commit()

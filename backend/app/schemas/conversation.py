@@ -46,6 +46,8 @@ class ConversationListItem(BaseModel):
     id: UUID
     subscriber_id: UUID
     subscriber_name: str | None = None
+    subscriber_first_name: str | None = None
+    subscriber_last_name: str | None = None
     channel: str
     status: str
     buyer_stage: str | None = None

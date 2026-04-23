@@ -53,6 +53,7 @@ class Settings(BaseSettings):
 
     # ── AI / Anthropic ────────────────────────────────────────
     anthropic_api_key: str = ""
+    hyros_api_key: str = ""
 
     # ── Cron Jobs ─────────────────────────────────────────────
     cron_secret: str = "change-me-to-a-random-cron-secret"

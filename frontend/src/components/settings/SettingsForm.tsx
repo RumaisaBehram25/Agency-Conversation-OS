@@ -8,8 +8,9 @@ interface SettingsFormProps {
   onSave: (data: SettingsUpdate) => Promise<void>;
 }
 
-function isMasked(value: string): boolean {
-  return /^\*+.{0,4}$/.test(value) || value === '';
+function isMasked(value: string | null | undefined): boolean {
+  const safeValue = value || '';
+  return /^\*+.{0,4}$/.test(safeValue) || safeValue === '';
 }
 
 export default function SettingsForm({ settings, onSave }: SettingsFormProps) {
@@ -22,6 +23,7 @@ export default function SettingsForm({ settings, onSave }: SettingsFormProps) {
     meta_ad_account_id: '',
     meta_page_id: '',
     meta_business_manager_id: '',
+    hyros_api_key: '',
   });
   const [loading, setLoading] = useState(false);
   const [toast, setToast] = useState('');
@@ -37,6 +39,7 @@ export default function SettingsForm({ settings, onSave }: SettingsFormProps) {
       meta_ad_account_id: settings.meta_ad_account_id || '',
       meta_page_id: settings.meta_page_id || '',
       meta_business_manager_id: settings.meta_business_manager_id || '',
+      hyros_api_key: settings.hyros_api_key || '',
     });
   }, [settings]);
 
@@ -157,6 +160,29 @@ export default function SettingsForm({ settings, onSave }: SettingsFormProps) {
             value={form.meta_business_manager_id || ''}
             onChange={(e) => updateField('meta_business_manager_id', e.target.value)}
             placeholder="Business Manager ID"
+            className="sm:col-span-2"
+          />
+        </div>
+      </div>
+
+      {/* Hyros Section */}
+      <div className="mb-8 border-t border-gray-200 pt-8">
+        <div className="mb-4 flex items-center gap-2">
+          <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-emerald-100">
+            <svg className="h-4 w-4 text-emerald-600" fill="none" viewBox="0 0 24 24" strokeWidth="1.5" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 12.75l5.159-5.159a2.25 2.25 0 013.182 0l1.409 1.409a2.25 2.25 0 003.182 0l3.909-3.909m0 0h-3.375m3.375 0v3.375M3.75 20.25h16.5" />
+            </svg>
+          </div>
+          <h3 className="text-base font-semibold text-gray-900">Hyros</h3>
+        </div>
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+          <Input
+            label="API Key"
+            type="password"
+            value={form.hyros_api_key || ''}
+            onChange={(e) => updateField('hyros_api_key', e.target.value)}
+            placeholder={isMasked(settings.hyros_api_key) ? 'Enter new Hyros API key to update' : ''}
+            helpText={isMasked(settings.hyros_api_key) ? 'Current key is masked. Enter a new value to update.' : ''}
             className="sm:col-span-2"
           />
         </div>

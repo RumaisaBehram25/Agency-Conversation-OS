@@ -94,6 +94,16 @@ class SubscriberContext(BaseModel):
     ad_id: str | None = None
     post_id: str | None = None
     attora_campaign_id: str | None = None
+    hyros_lead_id: str | None = None
+    hyros_email: str | None = None
+    hyros_origin_source: str | None = None
+    hyros_origin_tag: str | None = None
+    hyros_traffic_source: str | None = None
+    hyros_creative_name: str | None = None
+    hyros_purchased: bool = False
+    hyros_product: str | None = None
+    hyros_purchase_date: datetime | None = None
+    hyros_synced_at: datetime | None = None
 
 
 class ConversationContext(BaseModel):

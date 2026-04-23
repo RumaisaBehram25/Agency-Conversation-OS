@@ -36,6 +36,7 @@ class AnalyticsResponse(BaseModel):
     ccr: float | None = None
     avg_response_time_ms: int | None = None
     qualification_rate: float | None = None
+    hyros_confirmed_purchases: int = 0
 
     # Totals
     total_conversations: int = 0

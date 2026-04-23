@@ -30,6 +30,13 @@ const conversionOptions = [
   { value: 'false', label: 'Not Converted' },
 ];
 
+const hyrosOptions = [
+  { value: '', label: 'All Hyros Status' },
+  { value: 'purchased', label: 'Purchased' },
+  { value: 'lead', label: 'Lead' },
+  { value: 'unknown', label: 'Unknown' },
+];
+
 export default function LeadsPage() {
   const queryClient = useQueryClient();
   const [filters, setFilters] = useState<SubscriberFilters & { is_converted_str?: string }>({
@@ -40,6 +47,7 @@ export default function LeadsPage() {
     page: 1,
     page_size: 20,
     is_converted_str: '',
+    hyros_status: '',
   });
 
   const apiFilters: SubscriberFilters = {
@@ -50,6 +58,7 @@ export default function LeadsPage() {
         : filters.is_converted_str === 'false'
         ? false
         : undefined,
+    hyros_status: filters.hyros_status || undefined,
   };
 
   const { data, isLoading, isError } = useQuery({
@@ -104,6 +113,13 @@ export default function LeadsPage() {
           value={filters.is_converted_str || ''}
           onChange={(e) => updateFilter('is_converted_str', e.target.value)}
           className="w-40"
+        />
+        <Select
+          label="Hyros Status"
+          options={hyrosOptions}
+          value={filters.hyros_status || ''}
+          onChange={(e) => updateFilter('hyros_status', e.target.value)}
+          className="w-44"
         />
         <div>
           <label className="block text-sm font-medium text-gray-700 mb-1">Date Range</label>

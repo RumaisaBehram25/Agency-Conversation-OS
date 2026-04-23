@@ -197,6 +197,8 @@ async def list_conversations(
                 id=conv.id,
                 subscriber_id=conv.subscriber_id,
                 subscriber_name=subscriber_name,
+                subscriber_first_name=subscriber.first_name if subscriber else None,
+                subscriber_last_name=subscriber.last_name if subscriber else None,
                 channel=conv.channel.value,
                 status=conv.status.value,
                 buyer_stage=buyer_stage,

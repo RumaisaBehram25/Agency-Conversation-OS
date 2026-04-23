@@ -90,6 +90,18 @@ async def get_analytics(
     qualified_result = await db.execute(qualified_query)
     qualified_count = qualified_result.scalar() or 0
 
+    hyros_purchases_result = await db.execute(
+        select(func.count())
+        .select_from(Subscriber)
+        .where(
+            Subscriber.org_id == org_id,
+            Subscriber.hyros_purchased.is_(True),
+            Subscriber.created_at >= dt_from,
+            Subscriber.created_at <= dt_to,
+        )
+    )
+    hyros_confirmed_purchases = hyros_purchases_result.scalar() or 0
+
     # Compute CPQC: ad_spend / qualified_conversations
     cpqc = None
     if qualified_count > 0 and total_ad_spend > 0:
@@ -120,6 +132,7 @@ async def get_analytics(
         ccr=ccr,
         avg_response_time_ms=avg_response_time_ms,
         qualification_rate=qualification_rate,
+        hyros_confirmed_purchases=hyros_confirmed_purchases,
         total_conversations=total_conversations,
         total_conversions=total_conversions,
         total_revenue=total_revenue,

@@ -86,6 +86,16 @@ class Subscriber(Base, TimestampMixin, OrgScopedMixin):
     is_converted: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     conversion_value: Mapped[float | None] = mapped_column(Numeric(10, 2), nullable=True)
     converted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    hyros_purchased: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    hyros_product: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    hyros_purchase_date: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    hyros_lead_id: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
+    hyros_email: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    hyros_origin_source: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    hyros_origin_tag: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    hyros_traffic_source: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    hyros_creative_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    hyros_synced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     # ── Activity Metadata ────────────────────────────────────
     first_message_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

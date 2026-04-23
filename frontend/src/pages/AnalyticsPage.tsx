@@ -253,6 +253,7 @@ export default function AnalyticsPage() {
               ccr={analytics.ccr}
               avgResponseTimeMs={analytics.avg_response_time_ms}
               qualificationRate={analytics.qualification_rate}
+              hyrosConfirmedPurchases={analytics.hyros_confirmed_purchases}
             />
           )}
 

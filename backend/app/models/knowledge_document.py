@@ -34,6 +34,7 @@ class KnowledgeDocument(Base, TimestampMixin):
     keywords: Mapped[List[str] | None] = mapped_column(
         ARRAY(Text), nullable=True
     )
+    ad_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     source_file: Mapped[str | None] = mapped_column(String(255), nullable=True)
     section_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     category: Mapped[str | None] = mapped_column(String(100), nullable=True)

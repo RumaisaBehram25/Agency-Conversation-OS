@@ -76,11 +76,11 @@ export default function ConversationList({ conversations, onDeleted }: Conversat
               <td className="whitespace-nowrap px-6 py-4">
                 <div className="flex items-center">
                   <div className="flex h-8 w-8 items-center justify-center rounded-full bg-primary-100 text-sm font-medium text-primary-700">
-                    {conv.subscriber_name?.charAt(0)?.toUpperCase() || '?'}
+                    {(conv.subscriber_first_name?.charAt(0) || conv.subscriber_name?.charAt(0) || '?').toUpperCase()}
                   </div>
                   <div className="ml-3">
                     <p className="text-sm font-medium text-gray-900">
-                      {conv.subscriber_name || 'Unknown'}
+                      {[conv.subscriber_first_name, conv.subscriber_last_name].filter(Boolean).join(' ') || 'Unknown Subscriber'}
                     </p>
                     <p className="text-xs text-gray-500">
                       {conv.message_count} messages

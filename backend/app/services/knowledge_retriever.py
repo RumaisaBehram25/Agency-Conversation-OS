@@ -17,7 +17,7 @@ import logging
 import time
 
 import anthropic
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
@@ -62,6 +62,7 @@ _STAGE_FALLBACK_KEYWORDS: dict[str, list[str]] = {
 async def retrieve_knowledge(
     message: str,
     buyer_stage: str,
+    ad_name: str | None,
     db: AsyncSession,
 ) -> list[str]:
     """
@@ -88,7 +89,7 @@ async def retrieve_knowledge(
             return []
 
         # Step 2: Search knowledge documents
-        documents = await search_knowledge(keywords, db)
+        documents = await search_knowledge(keywords, db, ad_name=ad_name)
         if not documents:
             logger.debug("No knowledge documents found for keywords: %s", keywords)
             return []
@@ -166,6 +167,7 @@ async def generate_search_keywords(
 async def search_knowledge(
     keywords: list[str],
     db: AsyncSession,
+    ad_name: str | None = None,
 ) -> list[dict]:
     """
     Query knowledge_documents where keywords overlap with generated keywords.
@@ -178,14 +180,14 @@ async def search_knowledge(
         List of dicts with title, content, section_name, keywords.
     """
     try:
-        stmt = (
-            select(KnowledgeDocument)
-            .where(
-                KnowledgeDocument.is_active.is_(True),
-                KnowledgeDocument.keywords.overlap(keywords),
-            )
-            .limit(_MAX_DOCUMENTS)
-        )
+        filters = [KnowledgeDocument.is_active.is_(True)]
+        keyword_filter = KnowledgeDocument.keywords.overlap(keywords)
+        if ad_name:
+            filters.append(or_(keyword_filter, KnowledgeDocument.ad_name == ad_name))
+        else:
+            filters.append(keyword_filter)
+
+        stmt = select(KnowledgeDocument).where(*filters).limit(_MAX_DOCUMENTS)
 
         result = await db.execute(stmt)
         documents = result.scalars().all()

@@ -140,6 +140,16 @@ async def load_conversation_context(
         ad_id=custom_fields.get("ad_id") or subscriber.ad_id,
         post_id=custom_fields.get("post_id") or subscriber.post_id,
         attora_campaign_id=str(subscriber.attora_campaign_id) if subscriber.attora_campaign_id else None,
+        hyros_lead_id=subscriber.hyros_lead_id,
+        hyros_email=subscriber.hyros_email,
+        hyros_origin_source=subscriber.hyros_origin_source,
+        hyros_origin_tag=subscriber.hyros_origin_tag,
+        hyros_traffic_source=subscriber.hyros_traffic_source,
+        hyros_creative_name=subscriber.hyros_creative_name,
+        hyros_purchased=subscriber.hyros_purchased,
+        hyros_product=subscriber.hyros_product,
+        hyros_purchase_date=subscriber.hyros_purchase_date,
+        hyros_synced_at=subscriber.hyros_synced_at,
     )
 
     return ConversationContext(

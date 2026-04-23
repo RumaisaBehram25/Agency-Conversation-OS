@@ -47,7 +47,7 @@ export default function LeadDetailPage() {
       </button>
 
       <div className="mb-6">
-        <h1 className="text-2xl font-bold text-gray-900">{[lead.first_name, lead.last_name].filter(Boolean).join(' ') || 'Unknown Lead'}</h1>
+        <h1 className="text-2xl font-bold text-gray-900">{[lead.first_name, lead.last_name].filter(Boolean).join(' ') || 'Unknown Subscriber'}</h1>
         <p className="mt-1 text-sm text-gray-500">Lead profile and conversation history</p>
       </div>
 

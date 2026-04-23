@@ -41,6 +41,9 @@ class SubscriberListItem(BaseModel):
     utm_medium: str | None = None
     utm_campaign: str | None = None
     utm_content: str | None = None
+    hyros_purchased: bool = False
+    hyros_product: str | None = None
+    hyros_synced_at: datetime | None = None
 
     model_config = {"from_attributes": True}
 
@@ -68,6 +71,16 @@ class SubscriberDetail(BaseModel):
     is_converted: bool
     conversion_value: float | None = None
     converted_at: datetime | None = None
+    hyros_purchased: bool = False
+    hyros_product: str | None = None
+    hyros_purchase_date: datetime | None = None
+    hyros_lead_id: str | None = None
+    hyros_email: str | None = None
+    hyros_origin_source: str | None = None
+    hyros_origin_tag: str | None = None
+    hyros_traffic_source: str | None = None
+    hyros_creative_name: str | None = None
+    hyros_synced_at: datetime | None = None
 
     # Activity
     first_message_at: datetime | None = None

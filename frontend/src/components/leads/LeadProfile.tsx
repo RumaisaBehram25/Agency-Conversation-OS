@@ -22,6 +22,16 @@ function hasIntakeUtm(lead: SubscriberDetail): boolean {
   );
 }
 
+function hyrosStatusLabel(lead: SubscriberDetail): string {
+  if (lead.hyros_purchased) {
+    return 'Purchased';
+  }
+  if (lead.hyros_synced_at) {
+    return 'Lead matched';
+  }
+  return 'Unknown';
+}
+
 export default function LeadProfile({ lead }: LeadProfileProps) {
   const navigate = useNavigate();
 
@@ -115,6 +125,65 @@ export default function LeadProfile({ lead }: LeadProfileProps) {
           <Badge color={buyerStageBadgeColor(lead.buyer_stage)} className="text-sm px-3 py-1">
             {lead.buyer_stage}
           </Badge>
+        </div>
+
+        <div className="card">
+          <h3 className="text-sm font-semibold text-gray-900 mb-3">Hyros Attribution</h3>
+          
+          {lead.hyros_synced_at ? (
+            <dl className="space-y-3 text-sm">
+              <div>
+                <dt className="text-xs text-gray-500">Purchase Status</dt>
+                <dd className="mt-0.5">
+                  {lead.hyros_purchased ? (
+                    <span className="inline-flex items-center gap-1 font-medium text-green-700">
+                      Purchased ✅
+                    </span>
+                  ) : (
+                    <span className="text-gray-600">Not yet purchased</span>
+                  )}
+                </dd>
+              </div>
+
+              {lead.hyros_purchased && (
+                <>
+                  <div>
+                    <dt className="text-xs text-gray-500">Product</dt>
+                    <dd className="font-medium text-gray-900">{lead.hyros_product || '—'}</dd>
+                  </div>
+                  <div>
+                    <dt className="text-xs text-gray-500">Purchase Date</dt>
+                    <dd className="text-gray-700">{lead.hyros_purchase_date ? formatDate(lead.hyros_purchase_date) : '—'}</dd>
+                  </div>
+                </>
+              )}
+
+              <div>
+                <dt className="text-xs text-gray-500">Origin Ad</dt>
+                <dd className="text-gray-900 font-medium break-all">{lead.hyros_origin_source || '—'}</dd>
+              </div>
+              
+              <div>
+                <dt className="text-xs text-gray-500">Creative</dt>
+                <dd className="text-gray-700">{lead.hyros_creative_name || '—'}</dd>
+              </div>
+
+              <div>
+                <dt className="text-xs text-gray-500">Traffic Source</dt>
+                <dd className="text-gray-700 capitalize">{lead.hyros_traffic_source || '—'}</dd>
+              </div>
+
+              <div>
+                <dt className="text-xs text-gray-500">Last Synced</dt>
+                <dd className="text-xs text-gray-400">{formatDateTime(lead.hyros_synced_at)}</dd>
+              </div>
+            </dl>
+          ) : (
+            <div className="py-2">
+              <p className="text-sm text-gray-500 italic">Not synced</p>
+              <p className="mt-1 text-xs text-gray-400">Run Hyros sync to pull attribution data</p>
+            </div>
+          )}
         </div>
 
         {/* Interests */}

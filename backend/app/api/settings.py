@@ -22,7 +22,7 @@ from app.api.deps import get_current_user, get_org_id
 router = APIRouter()
 
 # Fields that must be encrypted before storage
-_ENCRYPTED_FIELDS = {"manychat_api_key", "meta_capi_token"}
+_ENCRYPTED_FIELDS = {"manychat_api_key", "meta_capi_token", "hyros_api_key"}
 
 
 def _org_to_settings_response(org: Organization) -> SettingsResponse:
@@ -43,6 +43,14 @@ def _org_to_settings_response(org: Organization) -> SettingsResponse:
         except (ValueError, Exception):
             meta_capi_token_masked = "****[decrypt-error]"
 
+    hyros_api_key_masked = None
+    if org.hyros_api_key:
+        try:
+            decrypted = decrypt_value(org.hyros_api_key)
+            hyros_api_key_masked = mask_value(decrypted)
+        except (ValueError, Exception):
+            hyros_api_key_masked = "****[decrypt-error]"
+
     return SettingsResponse(
         id=org.id,
         name=org.name,
@@ -55,6 +63,7 @@ def _org_to_settings_response(org: Organization) -> SettingsResponse:
         meta_ad_account_id=org.meta_ad_account_id,
         meta_page_id=org.meta_page_id,
         meta_business_manager_id=org.meta_business_manager_id,
+        hyros_api_key=hyros_api_key_masked,
         plan=org.plan,
         monthly_conversation_limit=org.monthly_conversation_limit,
         created_at=org.created_at,

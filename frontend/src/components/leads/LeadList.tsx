@@ -11,12 +11,31 @@ interface LeadListProps {
 }
 
 function displayName(lead: SubscriberListItem): string {
-  const parts = [lead.first_name, lead.last_name].filter(Boolean);
-  return parts.length > 0 ? parts.join(' ') : 'Unknown';
+  return [lead.first_name, lead.last_name].filter(Boolean).join(' ') || 'Unknown Subscriber';
 }
 
 function displayInitial(lead: SubscriberListItem): string {
   return lead.first_name?.charAt(0)?.toUpperCase() || lead.last_name?.charAt(0)?.toUpperCase() || '?';
+}
+
+function hyrosStatus(lead: SubscriberListItem): string {
+  if (lead.hyros_purchased === true) {
+    return 'Purchased ✅';
+  }
+  if (lead.hyros_synced_at) {
+    return 'Lead 👤';
+  }
+  return 'Unknown —';
+}
+
+function hyrosStatusColor(lead: SubscriberListItem): 'green' | 'blue' | 'gray' {
+  if (lead.hyros_purchased === true) {
+    return 'green';
+  }
+  if (lead.hyros_synced_at) {
+    return 'blue';
+  }
+  return 'gray';
 }
 
 export default function LeadList({ leads, onDeleted }: LeadListProps) {
@@ -69,6 +88,9 @@ export default function LeadList({ leads, onDeleted }: LeadListProps) {
               Buyer Stage
             </th>
             <th className="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
+              Hyros Status
+            </th>
+            <th className="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
               Conversion
             </th>
             <th className="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
@@ -112,6 +134,11 @@ export default function LeadList({ leads, onDeleted }: LeadListProps) {
               <td className="whitespace-nowrap px-6 py-4">
                 <Badge color={buyerStageBadgeColor(lead.buyer_stage)}>
                   {lead.buyer_stage}
+                </Badge>
+              </td>
+              <td className="whitespace-nowrap px-6 py-4">
+                <Badge color={hyrosStatusColor(lead)}>
+                  {hyrosStatus(lead)}
                 </Badge>
               </td>
               <td className="whitespace-nowrap px-6 py-4">

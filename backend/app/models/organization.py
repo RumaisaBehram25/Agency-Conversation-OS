@@ -38,6 +38,9 @@ class Organization(Base, TimestampMixin):
     meta_page_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     meta_business_manager_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
+    # ── Hyros Configuration ──────────────────────────────────
+    hyros_api_key: Mapped[str | None] = mapped_column(Text, nullable=True)  # encrypted
+
     # ── Attora API Key (for webhook auth) ────────────────────
     attora_api_key: Mapped[str] = mapped_column(Text, unique=True, nullable=False)  # encrypted
 

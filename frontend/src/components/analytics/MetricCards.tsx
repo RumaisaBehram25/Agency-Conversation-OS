@@ -5,6 +5,7 @@ interface AnalyticsMetricCardsProps {
   ccr: number | null;
   avgResponseTimeMs: number | null;
   qualificationRate: number | null;
+  hyrosConfirmedPurchases?: number;
 }
 
 interface MetricItem {
@@ -19,8 +20,15 @@ export default function AnalyticsMetricCards({
   ccr,
   avgResponseTimeMs,
   qualificationRate,
+  hyrosConfirmedPurchases = 0,
 }: AnalyticsMetricCardsProps) {
   const metrics: MetricItem[] = [
+    {
+      label: 'Hyros Confirmed Purchases',
+      value: hyrosConfirmedPurchases.toLocaleString(),
+      description: 'Purchases confirmed via Hyros attribution',
+      color: 'border-blue-200 bg-blue-50',
+    },
     {
       label: 'CPQC',
       value: cpqc != null ? formatCurrency(cpqc) : '—',

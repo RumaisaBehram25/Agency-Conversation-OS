@@ -274,6 +274,7 @@ async def _run_pipeline(
             knowledge = await retrieve_knowledge(
                 message=message,
                 buyer_stage=context.subscriber.buyer_stage,
+                ad_name=context.subscriber.hyros_origin_source,
                 db=db,
             )
             context.retrieved_knowledge = knowledge

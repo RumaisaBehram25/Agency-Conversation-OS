@@ -7,6 +7,7 @@ POST /api/cron/ad-spend-sync        — Sync ad spend and dual-write campaign fa
 POST /api/cron/export-ai-usage      — Export AI usage events to OLAP
 POST /api/cron/archive-messages     — Shadow-archive old messages to OLAP
 POST /api/cron/check-olap-parity    — Compare PostgreSQL facts vs exported Parquet
+POST /api/cron/hyros-sync           — Pull Hyros purchases and match subscribers
 
 Protected by CRON_SECRET header — not accessible to regular users.
 """
@@ -21,6 +22,7 @@ from app.config import settings
 from app.database import get_db
 from app.jobs.ad_spend_sync import sync_ad_spend
 from app.jobs.daily_digest import aggregate_daily_analytics
+from app.jobs.hyros_sync import sync_hyros_purchases
 from app.jobs.olap_exports import (
     archive_messages_to_olap,
     archive_messages_delta_to_olap,
@@ -181,3 +183,12 @@ async def cron_check_reporting_parity(
         date_from=date_from,
         date_to=date_to,
     )
+
+
+@router.post("/hyros-sync")
+async def cron_hyros_sync(
+    _: None = Depends(verify_cron_secret),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Pull Hyros purchases and match against subscriber name + utm_campaign."""
+    return await sync_hyros_purchases(db)

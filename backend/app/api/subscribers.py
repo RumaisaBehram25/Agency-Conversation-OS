@@ -38,6 +38,7 @@ async def list_subscribers(
     date_from: date | None = Query(None),
     date_to: date | None = Query(None),
     is_converted: bool | None = Query(None),
+    hyros_status: str | None = Query(None),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
 ) -> PaginatedResponse[SubscriberListItem]:
@@ -89,6 +90,22 @@ async def list_subscribers(
         query = query.where(Subscriber.is_converted == is_converted)
         count_query = count_query.where(Subscriber.is_converted == is_converted)
 
+    if hyros_status:
+        if hyros_status == "purchased":
+            query = query.where(Subscriber.hyros_purchased.is_(True))
+            count_query = count_query.where(Subscriber.hyros_purchased.is_(True))
+        elif hyros_status == "lead":
+            query = query.where(Subscriber.hyros_synced_at.is_not(None), Subscriber.hyros_purchased.is_(False))
+            count_query = count_query.where(Subscriber.hyros_synced_at.is_not(None), Subscriber.hyros_purchased.is_(False))
+        elif hyros_status == "unknown":
+            query = query.where(Subscriber.hyros_synced_at.is_(None))
+            count_query = count_query.where(Subscriber.hyros_synced_at.is_(None))
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid hyros_status. Must be one of: purchased, lead, unknown",
+            )
+
     # Count total
     total_result = await db.execute(count_query)
     total = total_result.scalar() or 0
@@ -117,6 +134,9 @@ async def list_subscribers(
             utm_medium=sub.utm_medium,
             utm_campaign=sub.utm_campaign,
             utm_content=sub.utm_content,
+            hyros_purchased=sub.hyros_purchased,
+            hyros_product=sub.hyros_product,
+            hyros_synced_at=sub.hyros_synced_at,
         )
         for sub in subscribers
     ]
@@ -180,6 +200,16 @@ async def get_subscriber(
         is_converted=subscriber.is_converted,
         conversion_value=float(subscriber.conversion_value) if subscriber.conversion_value else None,
         converted_at=subscriber.converted_at,
+        hyros_purchased=subscriber.hyros_purchased,
+        hyros_product=subscriber.hyros_product,
+        hyros_purchase_date=subscriber.hyros_purchase_date,
+        hyros_lead_id=subscriber.hyros_lead_id,
+        hyros_email=subscriber.hyros_email,
+        hyros_origin_source=subscriber.hyros_origin_source,
+        hyros_origin_tag=subscriber.hyros_origin_tag,
+        hyros_traffic_source=subscriber.hyros_traffic_source,
+        hyros_creative_name=subscriber.hyros_creative_name,
+        hyros_synced_at=subscriber.hyros_synced_at,
         first_message_at=subscriber.first_message_at,
         last_message_at=subscriber.last_message_at,
         total_messages=subscriber.total_messages,

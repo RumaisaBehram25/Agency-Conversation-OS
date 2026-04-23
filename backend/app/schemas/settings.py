@@ -30,6 +30,9 @@ class SettingsResponse(BaseModel):
     meta_page_id: str | None = None
     meta_business_manager_id: str | None = None
 
+    # Hyros
+    hyros_api_key: str | None = None
+
     # Plan
     plan: str
     monthly_conversation_limit: int
@@ -54,3 +57,6 @@ class SettingsUpdate(BaseModel):
     meta_ad_account_id: str | None = None
     meta_page_id: str | None = None
     meta_business_manager_id: str | None = None
+
+    # Hyros
+    hyros_api_key: str | None = None

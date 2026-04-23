@@ -7,6 +7,7 @@ export interface SubscriberFilters {
   date_from?: string;
   date_to?: string;
   is_converted?: boolean;
+  hyros_status?: 'purchased' | 'lead' | 'unknown' | string;
   page?: number;
   page_size?: number;
 }
@@ -21,6 +22,7 @@ export async function getSubscribers(
   if (filters.date_to) params.set('date_to', filters.date_to);
   if (filters.is_converted !== undefined)
     params.set('is_converted', String(filters.is_converted));
+  if (filters.hyros_status) params.set('hyros_status', filters.hyros_status);
   if (filters.page) params.set('page', String(filters.page));
   if (filters.page_size) params.set('page_size', String(filters.page_size));
 

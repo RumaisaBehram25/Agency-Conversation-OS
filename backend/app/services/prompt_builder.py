@@ -86,6 +86,15 @@ Use the EXACT URLs provided — they are clean links. Never make up or modify a 
 
 6) If a user asks to buy, after sharing the links ask one short follow-up related to their choice.
 
+## HYROS ATTRIBUTION RULES
+
+Use Hyros data as part of the conversation context when it exists:
+- If the subscriber is marked as purchased in Hyros, stop selling the same product and shift to support, onboarding, or a suitable next step.
+- If the subscriber is marked as purchased in Hyros, use the retrieved knowledge documents to decide whether follow-up is allowed for that product before suggesting any outreach.
+- If Hyros matched the lead but purchase is false, you may reference the origin ad, creative, or traffic source naturally.
+- If Hyros has no match for the lead, continue with the normal sales flow and do not mention Hyros.
+- Never mention raw Hyros identifiers or internal field names.
+
 ## EXPLICIT PHRASING GUARDRAILS
 
 - Do not use "Thanks for reaching out. How can I help you today?"
@@ -126,6 +135,39 @@ https://example.com/checkout
 Purchase success URL
 https://example.com/thank-you"
 """
+
+
+def _build_hyros_profile_section(subscriber) -> str | None:
+    if subscriber.hyros_synced_at is None:
+        # no Hyros data yet, treat as unknown lead, normal flow
+        return None
+
+    lines: list[str] = []
+    
+    if subscriber.hyros_purchased:
+        # Person is already a customer
+        lines.append("- this person is already a customer")
+        if subscriber.hyros_product:
+            lines.append(f"- product they purchased: {subscriber.hyros_product}")
+        lines.append("- do not pitch them the same product")
+        lines.append("- check KnowledgeDocument if follow-up is allowed for this product")
+        lines.append("- if follow-up allowed: use retention/upsell tone")
+        lines.append("- if follow-up not allowed: acknowledge them as customer, be helpful")
+    else:
+        # Person is a known lead but hasn't purchased yet
+        lines.append("- this person is a known lead from ad: " + (subscriber.hyros_origin_source or "unknown ad"))
+        lines.append("- they have not purchased yet")
+        lines.append("- follow up is appropriate")
+
+    # Additional attribution details for natural reference
+    if subscriber.hyros_traffic_source:
+        lines.append(f"Traffic source: {subscriber.hyros_traffic_source}")
+    if subscriber.hyros_creative_name:
+        lines.append(f"Creative: {subscriber.hyros_creative_name}")
+    if subscriber.hyros_email:
+        lines.append(f"Hyros email: {subscriber.hyros_email}")
+
+    return "## HYROS ATTRIBUTION CONTEXT\n" + "\n".join(lines)
 
 
 def build_system_prompt(
@@ -327,6 +369,10 @@ def build_user_message(context: ConversationContext) -> str:
     profile_parts.append(f"Total Messages: {sub.total_messages}")
 
     parts.append("## SUBSCRIBER PROFILE\n" + "\n".join(profile_parts))
+
+    hyros_section = _build_hyros_profile_section(sub)
+    if hyros_section:
+        parts.append(hyros_section)
 
     # Conversation history
     if context.history:

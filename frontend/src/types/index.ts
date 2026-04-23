@@ -93,6 +93,8 @@ export interface ConversationListItem {
   last_message_preview: string;
   last_message_at: string;
   message_count: number;
+  subscriber_first_name?: string | null;
+  subscriber_last_name?: string | null;
   created_at: string;
 }
 
@@ -117,6 +119,13 @@ export interface ConversationDetail {
   buyer_stage: string;
   products_discussed: string[];
   messages: ConversationMessage[];
+  subscriber?: {
+    id: string;
+    first_name: string | null;
+    last_name: string | null;
+    channel: string;
+    buyer_stage: string;
+  };
   created_at: string;
   updated_at: string;
 }
@@ -146,6 +155,9 @@ export interface SubscriberListItem {
   utm_medium?: string | null;
   utm_campaign?: string | null;
   utm_content?: string | null;
+  hyros_purchased: boolean;
+  hyros_product?: string | null;
+  hyros_synced_at: string | null;
 }
 
 export interface SubscriberConversation {
@@ -172,6 +184,16 @@ export interface SubscriberDetail {
   is_converted: boolean;
   conversion_value: number | null;
   converted_at: string | null;
+  hyros_purchased: boolean;
+  hyros_product: string | null;
+  hyros_purchase_date: string | null;
+  hyros_lead_id?: string | null;
+  hyros_email: string | null;
+  hyros_origin_source: string | null;
+  hyros_origin_tag: string | null;
+  hyros_traffic_source: string | null;
+  hyros_creative_name: string | null;
+  hyros_synced_at: string | null;
   first_message_at: string | null;
   last_message_at: string | null;
   total_messages: number;
@@ -321,6 +343,7 @@ export interface AnalyticsResponse {
   ccr: number;
   avg_response_time_ms: number;
   qualification_rate: number;
+  hyros_confirmed_purchases: number;
   total_conversations: number;
   total_conversions: number;
   total_revenue: number;
@@ -384,6 +407,7 @@ export interface SettingsResponse {
   meta_ad_account_id: string;
   meta_page_id: string;
   meta_business_manager_id: string;
+  hyros_api_key: string;
   created_at: string;
   updated_at: string;
 }
@@ -397,4 +421,5 @@ export interface SettingsUpdate {
   meta_ad_account_id?: string;
   meta_page_id?: string;
   meta_business_manager_id?: string;
+  hyros_api_key?: string;
 }

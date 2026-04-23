@@ -9,7 +9,6 @@ import LeadsPage from './pages/LeadsPage';
 import LeadDetailPage from './pages/LeadDetailPage';
 import ProductsPage from './pages/ProductsPage';
 import CampaignsPage from './pages/CampaignsPage';
-import AIConfigPage from './pages/AIConfigPage';
 import AnalyticsPage from './pages/AnalyticsPage';
 import SettingsPage from './pages/SettingsPage';
 import PlaygroundPage from './pages/PlaygroundPage';
@@ -34,7 +33,6 @@ export default function App() {
         <Route path="/leads/:id" element={<LeadDetailPage />} />
         <Route path="/products" element={<ProductsPage />} />
         <Route path="/campaigns" element={<CampaignsPage />} />
-        <Route path="/ai-config" element={<AIConfigPage />} />
         <Route path="/analytics" element={<AnalyticsPage />} />
         <Route path="/playground" element={<PlaygroundPage />} />
         <Route path="/settings" element={<SettingsPage />} />

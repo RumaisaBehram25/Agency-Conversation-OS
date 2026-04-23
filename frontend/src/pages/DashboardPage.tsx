@@ -111,6 +111,19 @@ export default function DashboardPage() {
 
       {/* Campaign Health */}
       <CampaignHealth campaigns={data.campaign_health} />
+
+      <div className="mt-6 rounded-2xl border border-blue-100 bg-blue-50 px-5 py-4 text-sm text-blue-900">
+        <p className="font-medium">Need help?</p>
+        <p className="mt-1">
+          Contact support at{' '}
+          <a
+            href="mailto:matt@attora.ai"
+            className="font-semibold underline decoration-blue-300 underline-offset-2"
+          >
+            matt@attora.ai
+          </a>
+        </p>
+      </div>
     </div>
   );
 }

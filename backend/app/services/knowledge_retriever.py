@@ -32,6 +32,16 @@ _SUMMARIZE_TIMEOUT_SECONDS = 0.5
 _MAX_TOKENS = 256
 _MAX_DOCUMENTS = 5
 
+# Reused across requests to avoid TCP/TLS handshake on each Haiku call.
+_client: anthropic.AsyncAnthropic | None = None
+
+
+def _get_client() -> anthropic.AsyncAnthropic:
+    global _client
+    if _client is None:
+        _client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
+    return _client
+
 # System prompts
 _KEYWORD_SYSTEM_PROMPT = (
     "You are a keyword extractor. Given a sales conversation message and buyer "
@@ -260,7 +270,7 @@ async def _call_haiku(
     user_content: str,
 ) -> str:
     """Make an API call to Claude Haiku. Returns the raw response text."""
-    client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
+    client = _get_client()
 
     response = await client.messages.create(
         model=_HAIKU_MODEL,

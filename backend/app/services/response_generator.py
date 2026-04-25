@@ -33,6 +33,18 @@ _RESPONSE_MODEL = "claude-sonnet-4-6"
 _RESPONSE_TIMEOUT_SECONDS = 12.0  # 12s hard timeout
 _MAX_TOKENS = 1024
 
+# Reused across requests. A fresh AsyncAnthropic per call rebuilds the
+# underlying HTTPX client and pays TCP/TLS handshake latency every time
+# (easily 100-300ms). Instantiating once keeps the HTTP/2 connection warm.
+_client: anthropic.AsyncAnthropic | None = None
+
+
+def _get_client() -> anthropic.AsyncAnthropic:
+    global _client
+    if _client is None:
+        _client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
+    return _client
+
 
 async def generate_response(
     context: ConversationContext,
@@ -101,7 +113,7 @@ async def _call_sonnet(
     user_message: str,
 ) -> AIResponse:
     """Make the actual API call to Claude Sonnet."""
-    client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
+    client = _get_client()
 
     response = await client.messages.create(
         model=_RESPONSE_MODEL,

@@ -32,6 +32,16 @@ _CLASSIFIER_MODEL = "claude-haiku-4-5-20251001"
 _CLASSIFIER_TIMEOUT_SECONDS = 2.0  # 2s budget (was 500ms — too tight, caused fallbacks)
 _MAX_TOKENS = 256
 
+# Reused across requests to avoid a TCP/TLS handshake on every classify.
+_client: anthropic.AsyncAnthropic | None = None
+
+
+def _get_client() -> anthropic.AsyncAnthropic:
+    global _client
+    if _client is None:
+        _client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
+    return _client
+
 # Classification system prompt
 _CLASSIFIER_SYSTEM_PROMPT = """You are a message intent classifier for a sales AI assistant. Analyze the user's message and classify it.
 
@@ -112,7 +122,7 @@ async def classify_message(
 
 async def _call_haiku_classifier(user_content: str) -> ClassificationResult:
     """Make the actual API call to Claude Haiku."""
-    client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
+    client = _get_client()
 
     response = await client.messages.create(
         model=_CLASSIFIER_MODEL,

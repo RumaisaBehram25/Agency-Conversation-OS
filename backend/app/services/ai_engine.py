@@ -28,6 +28,7 @@ from sqlalchemy.orm import selectinload
 
 from app.models.campaign import AdCampaign
 from app.schemas.ai_engine import AIResponse, IntentType
+from app.schemas.campaign import build_utm_url
 from app.services.buyer_stage import classify_buyer_stage
 from app.services.classifier import classify_message
 from app.services.config_loader import load_org_config
@@ -98,7 +99,11 @@ async def _load_subscriber_tagged_urls(
     attora_id: str | None = None,
 ) -> dict[str, str]:
     """
-    Look up the campaign's clean base URLs (no UTM parameters).
+    Look up the campaign's UTM URLs and stamp per-subscriber attribution.
+
+    Each returned URL carries attora_sub (ManyChat ID) and attora_id (Attora
+    UUID) so the landing page can attribute the conversion back to this exact
+    lead via /api/conversions/track.
 
     Returns a dict with keys "product_page", "checkout", "success" — only entries
     with a configured URL are included. Non-fatal on any failure; returns {}.
@@ -150,14 +155,35 @@ async def _load_subscriber_tagged_urls(
         if campaign is None or campaign.utm is None:
             return {}
 
-        # Return clean base URLs — no UTM params.
+        # Stamp identity params so the landing page can attribute back to
+        # this specific lead. Prefer the pre-built *_utm_url fields (which
+        # already have utm_source/utm_medium/utm_campaign baked in); fall
+        # back to the raw base URL only if the _utm_url variant is missing.
+        identity: dict[str, str] = {"attora_sub": subscriber_id}
+        if attora_id:
+            identity["attora_id"] = attora_id
+
+        utm = campaign.utm
         urls: dict[str, str] = {}
-        if campaign.utm.product_page_url:
-            urls["product_page"] = campaign.utm.product_page_url
-        if campaign.utm.checkout_url:
-            urls["checkout"] = campaign.utm.checkout_url
-        if campaign.utm.success_url:
-            urls["success"] = campaign.utm.success_url
+
+        def _stamp(base: str | None, tagged: str | None) -> str | None:
+            source = tagged or base
+            if not source:
+                return None
+            return build_utm_url(source, identity)
+
+        product_page = _stamp(utm.product_page_url, utm.product_page_utm_url)
+        if product_page:
+            urls["product_page"] = product_page
+
+        checkout = _stamp(utm.checkout_url, utm.checkout_utm_url)
+        if checkout:
+            urls["checkout"] = checkout
+
+        success = _stamp(utm.success_url, utm.success_utm_url)
+        if success:
+            urls["success"] = success
+
         return urls
     except Exception as e:
         logger.warning(
@@ -212,6 +238,7 @@ async def process_message(
     except asyncio.TimeoutError:
         elapsed_ms = int((time.monotonic() - pipeline_start) * 1000)
         logger.warning(f"Pipeline timeout after {elapsed_ms}ms for org={org_id}")
+        await _safe_rollback(db)
         return get_fallback_response(FallbackType.BUYING_TIME)
     except Exception as e:
         elapsed_ms = int((time.monotonic() - pipeline_start) * 1000)
@@ -219,7 +246,25 @@ async def process_message(
             f"Pipeline error after {elapsed_ms}ms for org={org_id}: {e}",
             exc_info=True,
         )
+        await _safe_rollback(db)
         return get_fallback_response(FallbackType.ERROR)
+
+
+async def _safe_rollback(db: AsyncSession | None) -> None:
+    """Reset a session that may be mid-transaction after a pipeline abort.
+
+    Why: asyncio.wait_for cancels an in-flight query without rolling back,
+    leaving the connection poisoned ("Can't reconnect until invalid
+    transaction is rolled back"). Any subsequent query on this session
+    — including the endpoint code that runs after process_message returns
+    the fallback — would then fail.
+    """
+    if db is None:
+        return
+    try:
+        await db.rollback()
+    except Exception as rollback_err:
+        logger.warning(f"Session rollback after pipeline abort failed: {rollback_err}")
 
 
 async def _run_pipeline(
@@ -256,9 +301,23 @@ async def _run_pipeline(
         f"Step 2 (context_load): {int((time.monotonic() - step_start) * 1000)}ms"
     )
 
+    # Kick off the classifier immediately — it's pure Haiku, no shared DB
+    # session, so it overlaps with everything that follows (UTM lookup +
+    # knowledge retrieval). Saves ~500-1500ms of serial latency.
+    subscriber_brief = (
+        f"Stage: {context.subscriber.buyer_stage}, "
+        f"Messages: {context.subscriber.total_messages}"
+    )
+    classify_start = time.monotonic()
+    classify_task = asyncio.create_task(
+        classify_message(message, subscriber_brief)
+    )
+
     # ── Step 2.1: Stamp per-subscriber UTM URLs ────────────────
     # So the AI can quote an attribution link scoped to THIS lead.
     # Stamps both attora_sub (ManyChat ID) and attora_id (Attora UUID).
+    # Sequential with knowledge retrieval because both use the same
+    # AsyncSession (not safe to share across concurrent tasks).
     context.subscriber_tagged_urls = await _load_subscriber_tagged_urls(
         db=db,
         org_id=org_id,
@@ -285,15 +344,10 @@ async def _run_pipeline(
         except Exception as e:
             logger.error(f"Knowledge retrieval failed, continuing pipeline: {e}")
 
-    # ── Step 3: Classify intent (<500ms via Haiku) ─────────────
-    step_start = time.monotonic()
-    subscriber_brief = (
-        f"Stage: {context.subscriber.buyer_stage}, "
-        f"Messages: {context.subscriber.total_messages}"
-    )
-    classification = await classify_message(message, subscriber_brief)
+    # ── Step 3: Await classifier (overlapped with steps above) ─
+    classification = await classify_task
     logger.debug(
-        f"Step 3 (classify): {int((time.monotonic() - step_start) * 1000)}ms "
+        f"Step 3 (classify): {int((time.monotonic() - classify_start) * 1000)}ms "
         f"intent={classification.intent}"
     )
 

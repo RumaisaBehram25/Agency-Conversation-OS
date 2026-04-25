@@ -46,56 +46,46 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         client_ip = request.client.host if request.client else "unknown"
         rate_key = f"ratelimit:{client_ip}"
 
+        limit = settings.rate_limit_per_minute
+        request_count: int | None = None
+
         try:
             current_time = time.time()
             window_start = current_time - 60  # 60-second sliding window
 
             # Use Redis pipeline for atomic operations
             pipe = redis_client.pipeline()
-
-            # Remove expired entries
             pipe.zremrangebyscore(rate_key, 0, window_start)
-
-            # Count current entries in the window
             pipe.zcard(rate_key)
-
-            # Add current request
             pipe.zadd(rate_key, {str(current_time): current_time})
-
-            # Set TTL on the key (auto-cleanup)
             pipe.expire(rate_key, 120)
 
             results = await pipe.execute()
             request_count = results[1]  # zcard result
+        except Exception as e:
+            # Redis failed — fail open and skip limit enforcement for this request.
+            logger.warning(f"Rate limiter error (allowing request): {e}")
 
-            # Check if rate limit exceeded
-            limit = settings.rate_limit_per_minute
-            if request_count >= limit:
-                retry_after = 60  # seconds
-                return JSONResponse(
-                    status_code=429,
-                    content={
-                        "detail": "Rate limit exceeded. Please try again later.",
-                        "retry_after": retry_after,
-                    },
-                    headers={
-                        "Retry-After": str(retry_after),
-                        "X-RateLimit-Limit": str(limit),
-                        "X-RateLimit-Remaining": "0",
-                    },
-                )
+        if request_count is not None and request_count >= limit:
+            retry_after = 60  # seconds
+            return JSONResponse(
+                status_code=429,
+                content={
+                    "detail": "Rate limit exceeded. Please try again later.",
+                    "retry_after": retry_after,
+                },
+                headers={
+                    "Retry-After": str(retry_after),
+                    "X-RateLimit-Limit": str(limit),
+                    "X-RateLimit-Remaining": "0",
+                },
+            )
 
-            # Process the request
-            response = await call_next(request)
+        response = await call_next(request)
 
-            # Add rate limit headers
+        if request_count is not None:
             remaining = max(0, limit - request_count - 1)
             response.headers["X-RateLimit-Limit"] = str(limit)
             response.headers["X-RateLimit-Remaining"] = str(remaining)
 
-            return response
-
-        except Exception as e:
-            # If Redis fails, allow the request through (fail open)
-            logger.warning(f"Rate limiter error (allowing request): {e}")
-            return await call_next(request)
+        return response

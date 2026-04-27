@@ -528,16 +528,10 @@ def _inject_purchase_link_if_needed(
     urls = subscriber_tagged_urls or {}
 
     # Past-tense purchase confirmations ("I just bought it", "got it", "I'm in").
-    # Don't send a checkout link — they already paid. Instead send the
-    # success/access URL so they can find what they purchased.
+    # Don't send any link — they already paid. Direct them to check their
+    # email for access (the AI's text response handles that messaging).
     is_post_purchase_signal = any(hint in msg for hint in _POST_PURCHASE_HINTS)
     if is_post_purchase_signal:
-        success_url = urls.get("success")
-        if success_url and success_url not in text:
-            link_text = f"Access your purchase here\n{success_url}"
-            ai_response.response_text = (
-                f"{text}\n\n{link_text}" if text else link_text
-            )
         return
 
     # Already at purchase stage but current message has no purchase signal

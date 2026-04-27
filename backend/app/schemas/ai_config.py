@@ -17,7 +17,7 @@ class AIConfigUpdate(BaseModel):
     persona_name: str | None = None
     product_knowledge: str | None = None
     compliance_rules: str | None = None
-    conversion_playbook: list | None = None
+    conversion_playbook: str | list | None = None
     objection_handlers: dict | None = None
     greeting_message: str | None = None
     fallback_message: str | None = None
@@ -46,7 +46,7 @@ class AIConfigResponse(BaseModel):
     persona_name: str | None = None
     product_knowledge: str | None = None
     compliance_rules: str | None = None
-    conversion_playbook: list | None = None
+    conversion_playbook: str | list | None = None
     objection_handlers: dict | None = None
     greeting_message: str | None = None
     fallback_message: str | None = None

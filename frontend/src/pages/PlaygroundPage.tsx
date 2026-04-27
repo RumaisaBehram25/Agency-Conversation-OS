@@ -18,6 +18,7 @@ export default function PlaygroundPage() {
   const [subscriberId, setSubscriberId] = useState(DEFAULT_SUBSCRIBER_ID);
   const [channel, setChannel] = useState('messenger');
   const [campaignId, setCampaignId] = useState('');
+  const [attoraCampaignId, setAttoraCampaignId] = useState('');
   const [turns, setTurns] = useState<Turn[]>([]);
   const [draft, setDraft] = useState('');
   const [sending, setSending] = useState(false);
@@ -48,6 +49,7 @@ export default function PlaygroundPage() {
 
     const custom_fields: Record<string, unknown> = {};
     if (campaignId.trim()) custom_fields.campaign_id = campaignId.trim();
+    if (attoraCampaignId.trim()) custom_fields.attora_campaign_id = attoraCampaignId.trim();
 
     try {
       const res = await aiTestChat({
@@ -146,7 +148,24 @@ export default function PlaygroundPage() {
 
           <div>
             <label className="block text-xs font-semibold uppercase tracking-wider text-gray-600">
-              Meta campaign ID (optional)
+              Attora campaign ID (organic)
+            </label>
+            <input
+              type="text"
+              value={attoraCampaignId}
+              onChange={(e) => setAttoraCampaignId(e.target.value)}
+              className="mt-1 w-full rounded-md border border-gray-300 px-3 py-1.5 text-sm font-mono text-xs"
+              placeholder="c28c2864-c579-40c6-b81f-fcdaaabf5d1f"
+            />
+            <p className="mt-1 text-[11px] text-gray-500">
+              Direct Attora campaign UUID — use this for organic campaigns (no Meta ID).
+              Copy from the Campaigns page "Attora ID" column.
+            </p>
+          </div>
+
+          <div>
+            <label className="block text-xs font-semibold uppercase tracking-wider text-gray-600">
+              Meta campaign ID (paid)
             </label>
             <input
               type="text"
@@ -156,8 +175,7 @@ export default function PlaygroundPage() {
               placeholder="120245110890980659"
             />
             <p className="mt-1 text-[11px] text-gray-500">
-              Passed as <span className="font-mono">custom_fields.campaign_id</span> to
-              simulate ad attribution. Only applied on first message (when subscriber is created).
+              Meta campaign ID — for paid ads, looked up against registered Attora campaigns.
             </p>
           </div>
 

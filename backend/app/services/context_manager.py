@@ -372,6 +372,14 @@ async def _get_or_create_subscriber(
             cached = await _lookup_post_id_from_ad_id(db, org_id, subscriber.ad_id)
             if cached:
                 subscriber.post_id = cached
+        # Direct attora_campaign_id pass-through (organic campaigns set this
+        # explicitly from ManyChat since they have no Meta ID to look up by).
+        direct_attora_id = custom_fields.get("attora_campaign_id")
+        if direct_attora_id and subscriber.attora_campaign_id is None:
+            try:
+                subscriber.attora_campaign_id = uuid.UUID(direct_attora_id)
+            except (ValueError, TypeError):
+                pass
         # Compliance: link subscriber to registered Attora campaign (or warn)
         if subscriber.campaign_id and subscriber.attora_campaign_id is None:
             subscriber.attora_campaign_id = await _resolve_attora_campaign_id(
@@ -393,7 +401,15 @@ async def _get_or_create_subscriber(
 
     meta_campaign_id = custom_fields.get("campaign_id")
     attora_campaign_id: uuid.UUID | None = None
-    if meta_campaign_id:
+    # Direct attora_campaign_id pass-through (organic campaigns set this
+    # explicitly from ManyChat since they have no Meta ID to look up by).
+    direct_attora_id = custom_fields.get("attora_campaign_id")
+    if direct_attora_id:
+        try:
+            attora_campaign_id = uuid.UUID(direct_attora_id)
+        except (ValueError, TypeError):
+            pass
+    if attora_campaign_id is None and meta_campaign_id:
         attora_campaign_id = await _resolve_attora_campaign_id(
             db, org_id, meta_campaign_id, manychat_subscriber_id
         )

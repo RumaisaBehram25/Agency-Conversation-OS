@@ -6,7 +6,9 @@ import {
   generateCampaignUtms,
   getCampaignUtmForSubscriber,
   listAdCampaigns,
+  updateAdCampaign,
 } from '../api/campaigns';
+import { getProducts } from '../api/products';
 import type { AdCampaign, CampaignUTM } from '../types';
 import LoadingSpinner from '../components/ui/LoadingSpinner';
 
@@ -15,6 +17,7 @@ interface NewCampaignForm {
   description: string;
   meta_campaign_id: string;
   meta_ad_set_id: string;
+  product_id: string;
 }
 
 interface UtmForm {
@@ -28,6 +31,7 @@ const EMPTY_NEW: NewCampaignForm = {
   description: '',
   meta_campaign_id: '',
   meta_ad_set_id: '',
+  product_id: '',
 };
 
 const EMPTY_UTM: UtmForm = {
@@ -55,6 +59,13 @@ export default function CampaignsPage() {
 
   const [pageSize, setPageSize] = useState(25);
   const [currentPage, setCurrentPage] = useState(1);
+  const [copiedId, setCopiedId] = useState<string | null>(null);
+
+  function copyCampaignId(id: string) {
+    void navigator.clipboard.writeText(id);
+    setCopiedId(id);
+    setTimeout(() => setCopiedId((current) => (current === id ? null : current)), 1500);
+  }
 
   const {
     data: campaigns = [],
@@ -64,6 +75,28 @@ export default function CampaignsPage() {
     queryKey: ['ad-campaigns'],
     queryFn: () => listAdCampaigns(),
   });
+
+  const { data: products = [] } = useQuery({
+    queryKey: ['products'],
+    queryFn: () => getProducts(),
+  });
+
+  async function handleAttachProduct(campaignId: string, productId: string) {
+    setError('');
+    try {
+      await updateAdCampaign(campaignId, {
+        product_id: productId || null,
+      });
+      await load();
+    } catch (e: unknown) {
+      const msg =
+        e && typeof e === 'object' && 'response' in e
+          ? // @ts-expect-error axios response shape
+            e.response?.data?.detail ?? 'Failed to update product link'
+          : 'Failed to update product link';
+      setError(String(msg));
+    }
+  }
 
   async function load() {
     await queryClient.invalidateQueries({ queryKey: ['ad-campaigns'] });
@@ -97,6 +130,7 @@ export default function CampaignsPage() {
         description: newCampaign.description.trim() || null,
         meta_campaign_id: newCampaign.meta_campaign_id.trim() || null,
         meta_ad_set_id: newCampaign.meta_ad_set_id.trim() || null,
+        product_id: newCampaign.product_id.trim() || null,
         is_attora_managed: true,
         is_active: true,
       });
@@ -291,6 +325,21 @@ export default function CampaignsPage() {
             setNewCampaign({ ...newCampaign, description: e.target.value })
           }
         />
+        <select
+          className="rounded-md border border-gray-300 px-3 py-2 text-sm"
+          value={newCampaign.product_id}
+          onChange={(e) =>
+            setNewCampaign({ ...newCampaign, product_id: e.target.value })
+          }
+        >
+          <option value="">No product linked</option>
+          {products.map((p) => (
+            <option key={p.id} value={p.id}>
+              {p.name}
+              {p.price ? ` — $${p.price}` : ''}
+            </option>
+          ))}
+        </select>
         <div className="md:col-span-2">
           <button
             type="submit"
@@ -310,6 +359,8 @@ export default function CampaignsPage() {
             <thead className="bg-gray-50">
               <tr className="text-left text-gray-600">
                 <th className="px-4 py-3 font-medium">Campaign</th>
+                <th className="px-4 py-3 font-medium">Attora ID</th>
+                <th className="px-4 py-3 font-medium">Product</th>
                 <th className="px-4 py-3 font-medium">Meta ID</th>
                 <th className="px-4 py-3 font-medium">Managed</th>
                 <th className="px-4 py-3 font-medium">UTM set</th>
@@ -321,7 +372,7 @@ export default function CampaignsPage() {
             <tbody>
               {campaigns.length === 0 ? (
                 <tr>
-                  <td className="px-4 py-6 text-gray-500" colSpan={5}>
+                  <td className="px-4 py-6 text-gray-500" colSpan={7}>
                     No campaigns registered.
                   </td>
                 </tr>
@@ -333,6 +384,31 @@ export default function CampaignsPage() {
                       {c.description && (
                         <div className="text-xs text-gray-500">{c.description}</div>
                       )}
+                    </td>
+                    <td className="px-4 py-3">
+                      <button
+                        type="button"
+                        onClick={() => copyCampaignId(c.id)}
+                        title={`Click to copy: ${c.id}`}
+                        className="rounded-md border border-gray-200 bg-gray-50 px-2 py-1 font-mono text-xs text-gray-700 hover:bg-gray-100"
+                      >
+                        {copiedId === c.id ? 'Copied!' : `${c.id.slice(0, 8)}…`}
+                      </button>
+                    </td>
+                    <td className="px-4 py-3">
+                      <select
+                        value={c.product_id ?? ''}
+                        onChange={(e) => void handleAttachProduct(c.id, e.target.value)}
+                        className="max-w-[14rem] rounded-md border border-gray-300 bg-white px-2 py-1 text-xs"
+                      >
+                        <option value="">— None —</option>
+                        {products.map((p) => (
+                          <option key={p.id} value={p.id}>
+                            {p.name}
+                            {p.price ? ` — $${p.price}` : ''}
+                          </option>
+                        ))}
+                      </select>
                     </td>
                     <td className="px-4 py-3 font-mono text-xs text-gray-700">
                       {c.meta_campaign_id ?? '-'}

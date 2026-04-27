@@ -472,6 +472,11 @@ def _inject_purchase_link_if_needed(
     text = (ai_response.response_text or "").strip()
     msg = (message or "").lower()
 
+    # Skip if the lead has already converted — they already have access; sending
+    # checkout links again is wrong and creates re-purchase friction.
+    if (ai_response.buyer_stage or "").lower() == "purchase":
+        return
+
     # Skip if the customer is only asking about price/cost — no link needed.
     is_price_only = any(hint in msg for hint in _PRICE_ONLY_HINTS)
     if is_price_only:

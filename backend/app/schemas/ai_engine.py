@@ -119,6 +119,10 @@ class ConversationContext(BaseModel):
     # URLs pre-stamped with attora_sub=<subscriber_id> so the AI can quote
     # per-lead attribution links. Keys: "product_page", "checkout", "success".
     subscriber_tagged_urls: dict[str, str] = Field(default_factory=dict)
+    # Product UUID linked to the subscriber's campaign. When set, the prompt
+    # builder filters PRODUCT CATALOG to just this product to prevent the AI
+    # from cross-pollinating product details across campaigns.
+    campaign_product_id: str | None = None
 
 
 # ── Client Configuration (cached) ────────────────────────────

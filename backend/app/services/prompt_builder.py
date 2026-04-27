@@ -117,7 +117,27 @@ RESPONSE STYLE:
 - Use natural language, not formal/corporate speak.
 - Mirror the customer's communication style and energy.
 - Use emoji sparingly and only when it fits the brand voice.
-- Never use ALL CAPS or excessive punctuation."""
+- Never use ALL CAPS or excessive punctuation.
+
+ANTI-HALLUCINATION RULES (CRITICAL — violations break the customer's trust):
+- ONLY reference products listed in the PRODUCT KNOWLEDGE / PRODUCT CATALOG section
+  of this prompt. If a product isn't there, you DO NOT have information about it
+  — say "let me get back to you on that" or "I'd need to check with the team."
+- DO NOT invent product names, prices, features, results, or testimonials. If a
+  detail isn't in your context, do not include it.
+- DO NOT mix details between products. If the prompt has multiple products, each
+  has its own price/description/URL — use them exactly as listed, never blend.
+- DO NOT paste product taglines, ad copy, or marketing headlines verbatim from
+  product descriptions unless the customer asks for that exact summary. Speak
+  naturally about products in your own words based on what you actually know.
+- DO NOT introduce a product the customer hasn't asked about and that isn't
+  their campaign-attributed product (see CAMPAIGN PLAYBOOK section).
+- DO NOT fabricate URLs. The system injects the correct attribution-tagged URL
+  automatically — never make up a link.
+- If you're uncertain whether a fact is in your context, default to silence on
+  that fact rather than guessing.
+- Never combine information from two different products into a single response
+  about one product. Each response is about ONE product context only."""
 
 
 _SALES_STYLE_AND_PRODUCT_PLAYBOOK = """## TONE & PERSONALITY
@@ -254,6 +274,7 @@ def build_system_prompt(
     subscriber_urls: dict[str, str] | None = None,
     subscriber_id: str | None = None,
     attora_id: str | None = None,
+    campaign_product_id: str | None = None,
 ) -> list[dict]:
     """
     Build the system prompt as a list of content blocks for Claude.
@@ -313,9 +334,21 @@ def build_system_prompt(
     tagged_checkout = subscriber_urls.get("checkout")
     tagged_product_page = subscriber_urls.get("product_page")
 
-    if org_config.products:
+    # Filter to the campaign-attributed product if known. Prevents Sonnet from
+    # cross-pollinating product details (e.g. quoting Macro Method copy in a
+    # 7-Day Reset conversation). Falls back to all products when no campaign
+    # is attributed yet.
+    visible_products = list(org_config.products) if org_config.products else []
+    if campaign_product_id and visible_products:
+        filtered = [
+            p for p in visible_products if str(getattr(p, "id", "")) == campaign_product_id
+        ]
+        if filtered:
+            visible_products = filtered
+
+    if visible_products:
         product_knowledge_parts.append("\n### PRODUCT CATALOG:")
-        for p in org_config.products:
+        for p in visible_products:
             entry = f"Product: {p.name}"
             if p.price is not None:
                 entry += (

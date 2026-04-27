@@ -7,8 +7,9 @@ interface MessageBubbleProps {
 }
 
 export default function MessageBubble({ message }: MessageBubbleProps) {
-  const isUser = message.sender_type === 'user';
-  const isSystem = message.sender_type === 'system';
+  const isUser = message.sender === 'user';
+  const isHuman = message.sender === 'human';
+  const isSystem = message.sender === 'system';
 
   if (isSystem) {
     return (
@@ -36,7 +37,7 @@ export default function MessageBubble({ message }: MessageBubbleProps) {
           }`}
         >
           <span className="text-xs font-medium">
-            {isUser ? 'User' : 'AI Assistant'}
+            {isUser ? 'User' : isHuman ? 'Human Agent' : 'AI Assistant'}
           </span>
           <span className="text-xs">{formatTime(message.created_at)}</span>
         </div>
@@ -48,9 +49,9 @@ export default function MessageBubble({ message }: MessageBubbleProps) {
 
         {/* Metadata footer */}
         <div className="flex flex-wrap items-center gap-2 px-4 pb-3">
-          {message.buyer_stage && (
-            <Badge color={buyerStageBadgeColor(message.buyer_stage)}>
-              {message.buyer_stage}
+          {message.buyer_stage_at_time && (
+            <Badge color={buyerStageBadgeColor(message.buyer_stage_at_time)}>
+              {message.buyer_stage_at_time}
             </Badge>
           )}
           {message.compliance_flags?.map((flag, i) => (
@@ -58,9 +59,9 @@ export default function MessageBubble({ message }: MessageBubbleProps) {
               {flag}
             </Badge>
           ))}
-          {message.intent && (
-            <Badge color="gray">{message.intent}</Badge>
-          )}
+          {message.intent_signals?.map((sig, i) => (
+            <Badge key={i} color="gray">{sig}</Badge>
+          ))}
         </div>
       </div>
     </div>

@@ -57,6 +57,26 @@ _PURCHASE_LINK_HINTS = (
     "how do i buy",
 )
 
+# Past-tense purchase confirmations — lead has already converted, do NOT
+# inject a checkout link (would be confusing / suggest re-purchase).
+_POST_PURCHASE_HINTS = (
+    "i bought",
+    "i just bought",
+    "i purchased",
+    "i just purchased",
+    "just purchased",
+    "got it",
+    "i got it",
+    "i'm in",
+    "im in",
+    "already bought",
+    "already purchased",
+    "paid for it",
+    "i paid",
+    "checked out",
+    "completed the purchase",
+)
+
 # When the message is ONLY about price, do NOT inject a purchase link.
 _PRICE_ONLY_HINTS = (
     "price",
@@ -108,8 +128,32 @@ async def _load_subscriber_tagged_urls(
     Returns a dict with keys "product_page", "checkout", "success" — only entries
     with a configured URL are included. Non-fatal on any failure; returns {}.
     """
+    result, _ = await _load_subscriber_tagged_urls_with_product(
+        db=db,
+        org_id=org_id,
+        attora_campaign_id=attora_campaign_id,
+        subscriber_id=subscriber_id,
+        attora_id=attora_id,
+    )
+    return result
+
+
+async def _load_subscriber_tagged_urls_with_product(
+    db: AsyncSession | None,
+    org_id: uuid.UUID,
+    attora_campaign_id: str | None,
+    subscriber_id: str,
+    attora_id: str | None = None,
+) -> tuple[dict[str, str], str | None]:
+    """
+    Same as _load_subscriber_tagged_urls but also returns the campaign's
+    linked product_id (so the prompt builder can filter the product catalog
+    to just the campaign-attributed product).
+
+    Returns: (urls_dict, product_id_str_or_None).
+    """
     if db is None:
-        return {}
+        return {}, None
 
     campaign_uuid: uuid.UUID | None = None
     if attora_campaign_id:
@@ -153,7 +197,7 @@ async def _load_subscriber_tagged_urls(
             campaign = next((c for c in candidates if c.utm is not None), None)
 
         if campaign is None or campaign.utm is None:
-            return {}
+            return {}, None
 
         # Stamp identity params so the landing page can attribute back to
         # this specific lead. Prefer the pre-built *_utm_url fields (which
@@ -184,14 +228,17 @@ async def _load_subscriber_tagged_urls(
         if success:
             urls["success"] = success
 
-        return urls
+        product_id_str = (
+            str(campaign.product_id) if campaign.product_id else None
+        )
+        return urls, product_id_str
     except Exception as e:
         logger.warning(
             "Failed to load per-subscriber UTM URLs for campaign %s: %s",
             attora_campaign_id,
             e,
         )
-        return {}
+        return {}, None
 
 
 async def process_message(
@@ -316,9 +363,15 @@ async def _run_pipeline(
     # ── Step 2.1: Stamp per-subscriber UTM URLs ────────────────
     # So the AI can quote an attribution link scoped to THIS lead.
     # Stamps both attora_sub (ManyChat ID) and attora_id (Attora UUID).
+    # Also returns the campaign's linked product_id so the prompt builder
+    # can filter the product catalog to just that one product (prevents
+    # cross-product hallucination).
     # Sequential with knowledge retrieval because both use the same
     # AsyncSession (not safe to share across concurrent tasks).
-    context.subscriber_tagged_urls = await _load_subscriber_tagged_urls(
+    (
+        context.subscriber_tagged_urls,
+        context.campaign_product_id,
+    ) = await _load_subscriber_tagged_urls_with_product(
         db=db,
         org_id=org_id,
         attora_campaign_id=context.subscriber.attora_campaign_id,
@@ -475,6 +528,13 @@ def _inject_purchase_link_if_needed(
     # Skip if the lead has already converted — they already have access; sending
     # checkout links again is wrong and creates re-purchase friction.
     if (ai_response.buyer_stage or "").lower() == "purchase":
+        return
+
+    # Skip on past-tense purchase confirmations ("I just bought it", "got it",
+    # "I'm in"). The buyer_stage classifier may not have transitioned yet on
+    # the same turn, so we also pattern-match the message itself.
+    is_post_purchase_signal = any(hint in msg for hint in _POST_PURCHASE_HINTS)
+    if is_post_purchase_signal:
         return
 
     # Skip if the customer is only asking about price/cost — no link needed.

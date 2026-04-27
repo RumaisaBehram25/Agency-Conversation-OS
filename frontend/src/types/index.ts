@@ -100,12 +100,16 @@ export interface ConversationListItem {
 
 export interface ConversationMessage {
   id: string;
-  conversation_id: string;
-  sender_type: string; // 'user' | 'ai' | 'system'
+  conversation_id?: string;
+  sender: string; // 'user' | 'ai' | 'human' — matches backend MessageSender
   content: string;
-  buyer_stage: string;
-  compliance_flags: string[];
-  intent: string;
+  buyer_stage_at_time?: string | null;
+  compliance_flags?: string[] | null;
+  intent_signals?: string[] | null;
+  ai_model?: string | null;
+  ai_response_time_ms?: number | null;
+  ai_tokens_used?: number | null;
+  quick_replies?: string[] | null;
   created_at: string;
 }
 

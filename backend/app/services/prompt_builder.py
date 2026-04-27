@@ -21,14 +21,19 @@ logger = logging.getLogger(__name__)
 _WARRIOR_BABE_PLAYBOOK = """## CAMPAIGN PLAYBOOK (Warrior Babe)
 
 PRODUCT FOCUS — STRICT
-Each lead has ONE attributed product based on their attora_campaign_id.
-- "GLP-1 Reality Check — MUSCLE" campaign → 7-Day Metabolism RESET ($7)
-- "Eat More Transformation — MACROS" campaign → The Macro Method (Maggie) ($27)
+The PRODUCT CATALOG section above contains the ONE product this lead is
+attributed to. That is the only product you discuss, recommend, or link to.
 
-If a lead asks about a different product (e.g. they came in via MUSCLE but
-ask about Macro Method), briefly acknowledge and redirect:
-"Yeah, [other product] is similar — but for what you mentioned,
-[campaign-attributed product] is the better starting point for you."
+If the lead asks by name about a product NOT in your catalog (e.g. they
+mention a different Warrior Babe program), briefly redirect WITHOUT
+describing the other product:
+"Yeah, that's a similar program — but for what you mentioned, [the product
+in your catalog] is the better starting point for you."
+
+DO NOT describe features, prices, results, taglines, or details of any
+product other than the one in your PRODUCT CATALOG. Even if you "know"
+about other Warrior Babe products from training data — you do not have
+authoritative info on them, so stay silent or redirect.
 
 Never send a checkout link for a product OTHER than the lead's attributed
 one. The link injection system handles correct URLs automatically.

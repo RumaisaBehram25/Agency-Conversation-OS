@@ -525,16 +525,26 @@ def _inject_purchase_link_if_needed(
     text = (ai_response.response_text or "").strip()
     msg = (message or "").lower()
 
-    # Skip if the lead has already converted — they already have access; sending
-    # checkout links again is wrong and creates re-purchase friction.
-    if (ai_response.buyer_stage or "").lower() == "purchase":
-        return
+    urls = subscriber_tagged_urls or {}
 
-    # Skip on past-tense purchase confirmations ("I just bought it", "got it",
-    # "I'm in"). The buyer_stage classifier may not have transitioned yet on
-    # the same turn, so we also pattern-match the message itself.
+    # Past-tense purchase confirmations ("I just bought it", "got it", "I'm in").
+    # Don't send a checkout link — they already paid. Instead send the
+    # success/access URL so they can find what they purchased.
     is_post_purchase_signal = any(hint in msg for hint in _POST_PURCHASE_HINTS)
     if is_post_purchase_signal:
+        success_url = urls.get("success")
+        if success_url and success_url not in text:
+            link_text = f"Access your purchase here\n{success_url}"
+            ai_response.response_text = (
+                f"{text}\n\n{link_text}" if text else link_text
+            )
+        return
+
+    # Already at purchase stage but current message has no purchase signal
+    # (e.g. lead is now chatting post-purchase about something else).
+    # Suppress all link injection — they already have access; spamming
+    # checkout/product links creates re-purchase friction.
+    if (ai_response.buyer_stage or "").lower() == "purchase":
         return
 
     # Skip if the customer is only asking about price/cost — no link needed.
@@ -549,30 +559,32 @@ def _inject_purchase_link_if_needed(
     if not is_buy_or_link_request:
         return
 
-    urls = subscriber_tagged_urls or {}
     if not urls:
         return
 
-    # Collect all available clean URLs not already in the response.
-    label_map = [
-        ("product_page", "Product page URL"),
-        ("checkout", "Checkout URL"),
-        ("success", "Purchase success URL"),
-    ]
-    missing: list[str] = []
-    for key, label in label_map:
-        url = urls.get(key)
-        if url and url not in text:
-            missing.append(f"{label}\n{url}")
+    # Pick ONE URL based on message intent — never append all three.
+    # Success URL is reserved for post-purchase signals (handled earlier);
+    # at this point the lead is still in the buying funnel, so prefer
+    # checkout > product_page. Never inject success here.
+    requested_type = _infer_requested_link_type(msg)
 
-    if not missing:
+    url_to_inject: str | None = None
+    if requested_type == "checkout":
+        url_to_inject = urls.get("checkout") or urls.get("product_page")
+    elif requested_type == "product":
+        url_to_inject = urls.get("product_page") or urls.get("checkout")
+    elif requested_type == "success":
+        # Pre-purchase ask for "success/confirmation" page — fall back to
+        # the buy path since they haven't actually purchased yet.
+        url_to_inject = urls.get("checkout") or urls.get("product_page")
+
+    if not url_to_inject or url_to_inject in text:
         return
 
-    links_text = "\n\n".join(missing)
     if text:
-        ai_response.response_text = f"{text}\n\n{links_text}"
+        ai_response.response_text = f"{text}\n\n{url_to_inject}"
     else:
-        ai_response.response_text = links_text
+        ai_response.response_text = url_to_inject
 
     ai_response.conversion_ready = True
 

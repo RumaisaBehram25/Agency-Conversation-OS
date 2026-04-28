@@ -79,3 +79,11 @@ class MetaSyncNowResponse(BaseModel):
     days_back: int
     granular: bool
     message: str
+    # Populated when the sync completes synchronously. None on early-exit errors.
+    campaigns_imported: int | None = None
+    campaigns_synced: int | None = None
+    adsets_synced: int | None = None
+    ads_synced: int | None = None
+    dates_updated: int | None = None
+    total_spend: float | None = None
+    errors: list[str] | None = None

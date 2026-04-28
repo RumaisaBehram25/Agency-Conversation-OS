@@ -333,7 +333,8 @@ export interface BreakdownItem {
 
 export interface DailyTrend {
   date: string;
-  value: number;
+  // null = no data for this day; chart should render a gap.
+  value: number | null;
 }
 
 export interface FunnelStep {

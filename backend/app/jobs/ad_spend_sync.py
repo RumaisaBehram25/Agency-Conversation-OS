@@ -41,9 +41,15 @@ async def sync_ad_spend(
     db: AsyncSession,
     days_back: int = 7,
     granular: bool = True,
+    org_id: uuid.UUID | None = None,
 ) -> dict:
     """
-    Sync ad spend from Meta Marketing API for all configured orgs.
+    Sync ad spend from Meta Marketing API.
+
+    When `org_id` is provided, syncs only that organization (used by the
+    user-triggered /meta/sync-now endpoint). When omitted, syncs every
+    organization that has Meta credentials configured (used by the cron
+    job that keeps all tenants fresh).
 
     Fetches the last `days_back` days of spend data and upserts into
     daily_analytics. Meta revises attribution data retroactively for
@@ -57,15 +63,17 @@ async def sync_ad_spend(
     date_to = date.today() - timedelta(days=1)  # yesterday (Meta has ~3hr delay)
     date_from = date_to - timedelta(days=days_back - 1)
 
-    # Load all orgs with a Meta ad account configured
-    result = await db.execute(
-        select(Organization).where(
-            Organization.meta_ad_account_id.isnot(None),
-            Organization.meta_ad_account_id != "",
-            Organization.meta_capi_token.isnot(None),
-            Organization.meta_capi_token != "",
-        )
+    # Load orgs with Meta credentials configured. Scope to a single org when
+    # the caller supplied one (user-triggered sync); otherwise all orgs (cron).
+    org_query = select(Organization).where(
+        Organization.meta_ad_account_id.isnot(None),
+        Organization.meta_ad_account_id != "",
+        Organization.meta_capi_token.isnot(None),
+        Organization.meta_capi_token != "",
     )
+    if org_id is not None:
+        org_query = org_query.where(Organization.id == org_id)
+    result = await db.execute(org_query)
     orgs = result.scalars().all()
 
     if not orgs:
@@ -180,7 +188,12 @@ async def sync_ad_spend(
             continue
 
         def _is_tracked(entry: dict) -> bool:
-            return entry.get("meta_campaign_id") in attora_campaign_ids
+            # Meta insights entries carry the key "campaign_id" (set via
+            # extra_id_fields in _flatten_insight_row); they do NOT have a
+            # "meta_campaign_id" field. Reading the wrong key was silently
+            # filtering out every campaign/adset/ad/breakdown insight,
+            # leaving campaign_metrics empty even after a successful sync.
+            return entry.get("campaign_id") in attora_campaign_ids
 
         # Campaign-level insights
         campaign_data = await fetch_campaign_insights(

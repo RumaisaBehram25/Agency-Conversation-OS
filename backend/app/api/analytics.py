@@ -42,14 +42,17 @@ async def analytics_overview(
     date_from: date = Query(default_factory=lambda: date.today() - timedelta(days=30)),
     date_to: date = Query(default_factory=date.today),
     channel: str | None = Query(None),
+    campaign_id: str | None = Query(None),
 ) -> AnalyticsResponse:
     """
     Get aggregated analytics metrics for a date range.
 
     Returns CPQC, CCR, avg response time, qualification rate,
-    funnel data, and daily trends.
+    funnel data, and daily trends. When campaign_id is provided,
+    CPQC is scoped to that campaign plus organic (no-attribution)
+    qualifications, with organic counted at $0 spend.
     """
-    return await get_analytics(db, org_id, date_from, date_to, channel)
+    return await get_analytics(db, org_id, date_from, date_to, channel, campaign_id)
 
 
 @router.get("/roi", response_model=ROIResponse)
@@ -59,13 +62,17 @@ async def analytics_roi(
     db: AsyncSession = Depends(get_db),
     date_from: date = Query(default_factory=lambda: date.today() - timedelta(days=30)),
     date_to: date = Query(default_factory=date.today),
+    campaign_id: str | None = Query(None),
 ) -> ROIResponse:
     """
     Get ROI / money metrics.
 
     Returns ad spend, CPA, ROAS, revenue, and before/after comparison.
+    When campaign_id is provided, ad spend comes from that campaign's
+    campaign_metrics rows and conversions/revenue/qualified are scoped
+    to that campaign plus organic — same semantic as the CPQC card.
     """
-    return await get_roi(db, org_id, date_from, date_to)
+    return await get_roi(db, org_id, date_from, date_to, campaign_id)
 
 
 @router.get("/ai-performance", response_model=AIPerformanceResponse)

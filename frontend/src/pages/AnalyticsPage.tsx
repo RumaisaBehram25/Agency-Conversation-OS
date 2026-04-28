@@ -4,7 +4,7 @@ import { Link } from 'react-router-dom';
 import { getAnalytics, getROI, getAIPerformance, getExportUrl } from '../api/analytics';
 import { getConversations } from '../api/conversations';
 import { getCampaigns } from '../api/campaigns';
-import { syncMetaNow } from '../api/settings';
+import { syncMetaNow, getMetaSyncStatus } from '../api/settings';
 import type { CampaignSummary } from '../types';
 import AnalyticsMetricCards from '../components/analytics/MetricCards';
 import FunnelChart from '../components/analytics/FunnelChart';
@@ -38,9 +38,17 @@ export default function AnalyticsPage() {
   const syncTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const syncIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  const SYNC_ETA_MS = 60_000;
-
   const dateRange = { date_from: dateFrom, date_to: dateTo };
+
+  // Sync window matches the visible "from" date so the user sees the data
+  // they just synced. Clamped to [1, 90] to satisfy the backend Meta cap.
+  const syncDaysBack = (() => {
+    const fromMs = new Date(dateFrom).getTime();
+    if (Number.isNaN(fromMs)) return 30;
+    const days = Math.ceil((Date.now() - fromMs) / 86_400_000);
+    return Math.min(90, Math.max(1, days));
+  })();
+  const SYNC_ETA_MS = Math.min(240_000, Math.max(30_000, syncDaysBack * 2_000));
 
   const { data: campaigns = [] } = useQuery<CampaignSummary[]>({
     queryKey: ['campaigns-for-analytics', dateRange],
@@ -48,12 +56,20 @@ export default function AnalyticsPage() {
   });
 
   const analyticsQuery = useQuery({
-    queryKey: ['analytics', dateRange],
-    queryFn: () => getAnalytics(dateRange),
+    queryKey: ['analytics', dateRange, selectedCampaign],
+    queryFn: () =>
+      getAnalytics({
+        ...dateRange,
+        ...(selectedCampaign ? { campaign_id: selectedCampaign } : {}),
+      }),
   });
   const roiQuery = useQuery({
-    queryKey: ['roi', dateRange],
-    queryFn: () => getROI(dateRange),
+    queryKey: ['roi', dateRange, selectedCampaign],
+    queryFn: () =>
+      getROI({
+        ...dateRange,
+        ...(selectedCampaign ? { campaign_id: selectedCampaign } : {}),
+      }),
   });
   const aiPerfQuery = useQuery({
     queryKey: ['ai-performance', dateRange],
@@ -79,13 +95,13 @@ export default function AnalyticsPage() {
 
   const load = useCallback(async () => {
     await Promise.all([
-      queryClient.invalidateQueries({ queryKey: ['analytics', dateRange] }),
-      queryClient.invalidateQueries({ queryKey: ['roi', dateRange] }),
+      queryClient.invalidateQueries({ queryKey: ['analytics', dateRange, selectedCampaign] }),
+      queryClient.invalidateQueries({ queryKey: ['roi', dateRange, selectedCampaign] }),
       queryClient.invalidateQueries({ queryKey: ['ai-performance', dateRange] }),
       queryClient.invalidateQueries({ queryKey: ['conversations-count', dateRange] }),
       queryClient.invalidateQueries({ queryKey: ['campaigns-for-analytics', dateRange] }),
     ]);
-  }, [queryClient, dateRange]);
+  }, [queryClient, dateRange, selectedCampaign]);
 
   useEffect(() => {
     return () => {
@@ -97,48 +113,109 @@ export default function AnalyticsPage() {
   async function handleSyncNow() {
     if (syncing) return;
     setSyncing(true);
-    setSyncStatus(null);
+    setSyncStatus('Syncing Meta data…');
     setSyncProgress(0);
+
+    // Tick a fake progress bar against the estimated duration. Capped at 95%
+    // so the user sees a final jump once the poll picks up the real result.
+    const startedAt = Date.now();
+    if (syncIntervalRef.current) clearInterval(syncIntervalRef.current);
+    syncIntervalRef.current = setInterval(() => {
+      const elapsed = Date.now() - startedAt;
+      const pct = Math.min(95, Math.round((elapsed / SYNC_ETA_MS) * 100));
+      setSyncProgress(pct);
+    }, 500);
+
+    // Hard ceiling so a stuck sync doesn't pin the UI forever. Backend can
+    // run longer than this — the user can refresh to see the final result.
+    const POLL_MAX_MS = 20 * 60 * 1000;
+    const POLL_INTERVAL_MS = 3000;
+
     try {
-      const res = await syncMetaNow(30, true);
-      setSyncStatus(res.message);
+      const kick = await syncMetaNow(syncDaysBack, true);
+      setSyncStatus(kick.message);
 
-      const startedAt = Date.now();
-      if (syncIntervalRef.current) clearInterval(syncIntervalRef.current);
-      syncIntervalRef.current = setInterval(() => {
-        const elapsed = Date.now() - startedAt;
-        // Cap display at 95% until the real completion tick fires
-        const pct = Math.min(95, Math.round((elapsed / SYNC_ETA_MS) * 100));
-        setSyncProgress(pct);
-      }, 500);
-
-      if (syncTimeoutRef.current) clearTimeout(syncTimeoutRef.current);
-      syncTimeoutRef.current = setTimeout(() => {
-        if (syncIntervalRef.current) {
-          clearInterval(syncIntervalRef.current);
-          syncIntervalRef.current = null;
+      const pollStartedAt = Date.now();
+      while (true) {
+        await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
+        let st;
+        try {
+          st = await getMetaSyncStatus();
+        } catch {
+          // Transient network blip — keep polling, the sync may still be running.
+          continue;
         }
-        setSyncProgress(100);
-        setSyncStatus('Sync complete — refreshing charts…');
-        load();
-        setTimeout(() => {
+        if (st && st.in_progress === false && st.summary) {
+          if (syncIntervalRef.current) {
+            clearInterval(syncIntervalRef.current);
+            syncIntervalRef.current = null;
+          }
+          setSyncProgress(100);
+          setSyncStatus(st.message ?? 'Meta sync complete.');
+          load();
+
+          const errs = st.summary?.errors ?? null;
+          const dwellMs = errs && errs.length > 0 ? 8000 : 4000;
+          if (syncTimeoutRef.current) clearTimeout(syncTimeoutRef.current);
+          syncTimeoutRef.current = setTimeout(() => {
+            setSyncing(false);
+            setSyncStatus(null);
+            setSyncProgress(0);
+          }, dwellMs);
+          return;
+        }
+        if (Date.now() - pollStartedAt > POLL_MAX_MS) {
+          if (syncIntervalRef.current) {
+            clearInterval(syncIntervalRef.current);
+            syncIntervalRef.current = null;
+          }
           setSyncing(false);
-          setSyncStatus(null);
           setSyncProgress(0);
-        }, 2000);
-      }, SYNC_ETA_MS);
+          setSyncStatus(
+            'Sync is taking longer than expected. It may still finish on the backend — refresh in a few minutes to see the latest data.'
+          );
+          return;
+        }
+      }
     } catch (err: unknown) {
-      setSyncing(false);
-      setSyncProgress(0);
       if (syncIntervalRef.current) {
         clearInterval(syncIntervalRef.current);
         syncIntervalRef.current = null;
       }
-      const detail =
-        typeof err === 'object' && err !== null && 'response' in err
-          ? ((err as { response?: { data?: { detail?: string } } }).response?.data?.detail ?? null)
-          : null;
-      setSyncStatus(detail ?? 'Failed to start Meta sync. Check Settings → Meta credentials.');
+      setSyncing(false);
+      setSyncProgress(0);
+
+      // Surface as much detail as we can find. `detail` is FastAPI's standard
+      // error shape, but a 5xx, proxy timeout, or unhandled exception lands us
+      // somewhere else — fall back through every channel before the generic.
+      let msg = 'Failed to run Meta sync. Check Settings → Meta credentials.';
+      if (typeof err === 'object' && err !== null) {
+        const e = err as {
+          response?: { status?: number; statusText?: string; data?: unknown };
+          message?: string;
+          code?: string;
+        };
+        const status = e.response?.status;
+        const statusText = e.response?.statusText;
+        const data = e.response?.data;
+        let body: string | null = null;
+        if (typeof data === 'string') {
+          body = data;
+        } else if (data && typeof data === 'object') {
+          const d = data as { detail?: unknown; message?: unknown };
+          if (typeof d.detail === 'string') body = d.detail;
+          else if (typeof d.message === 'string') body = d.message;
+          else body = JSON.stringify(d);
+        }
+        if (status) {
+          msg = `Meta sync failed (HTTP ${status}${statusText ? ` ${statusText}` : ''})${body ? `: ${body}` : ''}`;
+        } else if (e.code === 'ECONNABORTED' || (e.message && e.message.toLowerCase().includes('timeout'))) {
+          msg = 'Meta sync request timed out before the server replied. The sync may still be running on the backend — try refreshing in a minute.';
+        } else if (e.message) {
+          msg = `Meta sync failed: ${e.message}`;
+        }
+      }
+      setSyncStatus(msg);
     }
   }
 
@@ -180,10 +257,16 @@ export default function AnalyticsPage() {
         </div>
         <div className="flex items-center gap-3">
           <Select
-            options={campaigns.map((c) => ({
-              value: c.meta_campaign_id,
-              label: `${c.meta_campaign_name || 'Unnamed'}${c.status ? ` (${c.status.charAt(0).toUpperCase() + c.status.slice(1)})` : ''}`,
-            }))}
+            options={campaigns.map((c) => {
+              const name = c.meta_campaign_name || 'Unnamed';
+              const status = c.status
+                ? ` (${c.status.charAt(0).toUpperCase() + c.status.slice(1)})`
+                : '';
+              return {
+                value: c.meta_campaign_id,
+                label: `${name}${status}`,
+              };
+            })}
             placeholder="All Campaigns"
             value={selectedCampaign}
             onChange={(e) => setSelectedCampaign(e.target.value)}
@@ -254,6 +337,7 @@ export default function AnalyticsPage() {
               avgResponseTimeMs={analytics.avg_response_time_ms}
               qualificationRate={analytics.qualification_rate}
               hyrosConfirmedPurchases={analytics.hyros_confirmed_purchases}
+              cpqcIncludesOrganic={!!selectedCampaign}
             />
           )}
 

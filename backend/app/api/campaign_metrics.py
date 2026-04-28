@@ -17,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user, get_org_id
 from app.database import get_db
+from app.models.campaign import AdCampaign
 from app.models.campaign_metrics import CampaignBreakdown, CampaignMetric
 from app.models.user import User
 from app.schemas.campaigns import (
@@ -54,11 +55,28 @@ async def list_campaigns(
     date_from: date = Query(default_factory=_default_date_from),
     date_to: date = Query(default_factory=_default_date_to),
 ) -> list[CampaignSummary]:
-    """List campaigns with aggregated metrics for the given date range."""
+    """List campaigns with aggregated metrics for the given date range.
+
+    Sources the campaign list from ad_campaigns (auto-imported during Meta sync)
+    so every Attora-managed campaign appears in the dropdown — even when it had
+    no spend in the selected window. Metrics are left-joined from campaign_metrics
+    and aggregate to 0 when no rows exist for the range.
+    """
+    metric_filter = (
+        (CampaignMetric.org_id == org_id)
+        & (CampaignMetric.level == "campaign")
+        & (CampaignMetric.meta_campaign_id == AdCampaign.meta_campaign_id)
+        & (CampaignMetric.date >= date_from)
+        & (CampaignMetric.date <= date_to)
+    )
+
     query = (
         select(
-            CampaignMetric.meta_campaign_id,
-            func.max(CampaignMetric.meta_campaign_name).label("meta_campaign_name"),
+            AdCampaign.meta_campaign_id.label("meta_campaign_id"),
+            func.coalesce(
+                func.max(CampaignMetric.meta_campaign_name),
+                AdCampaign.name,
+            ).label("meta_campaign_name"),
             func.max(CampaignMetric.status).label("status"),
             _coalesce_sum(CampaignMetric.spend).label("spend"),
             _coalesce_sum(CampaignMetric.impressions).label("impressions"),
@@ -70,11 +88,13 @@ async def list_campaigns(
             _coalesce_avg(CampaignMetric.cpm).label("cpm"),
             _coalesce_avg(CampaignMetric.ctr).label("ctr"),
         )
-        .where(CampaignMetric.org_id == org_id)
-        .where(CampaignMetric.level == "campaign")
-        .where(CampaignMetric.date >= date_from)
-        .where(CampaignMetric.date <= date_to)
-        .group_by(CampaignMetric.meta_campaign_id)
+        .select_from(AdCampaign)
+        .outerjoin(CampaignMetric, metric_filter)
+        .where(AdCampaign.org_id == org_id)
+        .where(AdCampaign.is_attora_managed.is_(True))
+        .where(AdCampaign.is_active.is_(True))
+        .where(AdCampaign.meta_campaign_id.isnot(None))
+        .group_by(AdCampaign.meta_campaign_id, AdCampaign.name)
         .order_by(func.coalesce(func.sum(CampaignMetric.spend), 0).desc())
     )
 

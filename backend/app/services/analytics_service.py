@@ -8,10 +8,11 @@ and campaign health from DailyAnalytics + raw tables.
 import uuid
 from datetime import date, datetime, timedelta, timezone
 
-from sqlalchemy import func, select, and_, case
+from sqlalchemy import func, select, and_, or_, case
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.analytics import DailyAnalytics
+from app.models.campaign_metrics import CampaignMetric
 from app.models.conversation import Conversation
 from app.models.conversion import ConversionEvent
 from app.models.message import Message
@@ -33,10 +34,17 @@ async def get_analytics(
     date_from: date,
     date_to: date,
     channel: str | None = None,
+    campaign_id: str | None = None,
 ) -> AnalyticsResponse:
     """Compute aggregated analytics metrics for a date range."""
 
-    # Base filter for daily_analytics
+    # Base filter for daily_analytics.
+    #
+    # daily_digest writes one row per (date, channel) PLUS a separate combined
+    # row with channel=NULL that already aggregates across channels. Summing
+    # across both groups double-counts every metric. Without an explicit
+    # channel filter, restrict to the combined (channel=NULL) row so totals
+    # reflect reality.
     filters = [
         DailyAnalytics.org_id == org_id,
         DailyAnalytics.date >= date_from,
@@ -47,7 +55,9 @@ async def get_analytics(
             channel_type = ChannelType(channel)
             filters.append(DailyAnalytics.channel == channel_type)
         except ValueError:
-            pass
+            filters.append(DailyAnalytics.channel.is_(None))
+    else:
+        filters.append(DailyAnalytics.channel.is_(None))
 
     # Aggregate from daily_analytics
     agg_result = await db.execute(
@@ -63,31 +73,61 @@ async def get_analytics(
     total_conversations = await _count_conversations_raw(db, org_id, date_from, date_to, channel)
     total_conversions = int(row.total_conversions)
     total_revenue = float(row.total_revenue)
-    total_ad_spend = float(row.total_ad_spend)
     avg_response_time_ms = int(row.avg_response_time_ms) if row.avg_response_time_ms else None
 
-    # Count qualified subscribers (consideration stage or above) for CPQC
+    # CPQC numerator: org-wide ad_spend by default; campaign-scoped when
+    # campaign_id is provided. Organic flows have no spend, so the per-campaign
+    # numerator is exactly that campaign's spend (organic contributes $0).
+    if campaign_id:
+        spend_result = await db.execute(
+            select(func.coalesce(func.sum(CampaignMetric.spend), 0))
+            .where(
+                CampaignMetric.org_id == org_id,
+                CampaignMetric.level == "campaign",
+                CampaignMetric.meta_campaign_id == campaign_id,
+                CampaignMetric.date >= date_from,
+                CampaignMetric.date <= date_to,
+            )
+        )
+        total_ad_spend = float(spend_result.scalar() or 0)
+    else:
+        total_ad_spend = float(row.total_ad_spend)
+
+    # Count qualified subscribers — INTENT stage or above — for CPQC.
+    #
+    # CONSIDERATION is intentionally excluded: the buyer-stage classifier
+    # auto-promotes any conversation with >= 4 messages from awareness to
+    # consideration without an explicit intent signal, which made the
+    # qualification rate trivially 100%. Restricting to INTENT or higher
+    # means a subscriber must have shown an actual buying signal (keyword,
+    # intent classification, or AI assessment) to count.
     dt_from = datetime(date_from.year, date_from.month, date_from.day, tzinfo=timezone.utc)
     dt_to = datetime(date_to.year, date_to.month, date_to.day, 23, 59, 59, tzinfo=timezone.utc)
 
     qualified_stages = [
-        BuyerStage.CONSIDERATION,
         BuyerStage.INTENT,
         BuyerStage.PURCHASE,
         BuyerStage.POST_PURCHASE,
     ]
 
-    qualified_query = (
-        select(func.count())
-        .select_from(Subscriber)
-        .where(
-            Subscriber.org_id == org_id,
-            Subscriber.buyer_stage.in_(qualified_stages),
-            Subscriber.created_at >= dt_from,
-            Subscriber.created_at <= dt_to,
+    qualified_filters = [
+        Subscriber.org_id == org_id,
+        Subscriber.buyer_stage.in_(qualified_stages),
+        Subscriber.created_at >= dt_from,
+        Subscriber.created_at <= dt_to,
+    ]
+    # When scoped to a campaign, include that campaign's qualified subscribers
+    # plus organic (campaign_id IS NULL). Organic enters with $0 spend, which
+    # is the intended client-facing semantic: every campaign gets credit for
+    # organic-driven qualifications.
+    if campaign_id:
+        qualified_filters.append(
+            or_(Subscriber.campaign_id == campaign_id, Subscriber.campaign_id.is_(None))
         )
+
+    qualified_result = await db.execute(
+        select(func.count()).select_from(Subscriber).where(*qualified_filters)
     )
-    qualified_result = await db.execute(qualified_query)
     qualified_count = qualified_result.scalar() or 0
 
     hyros_purchases_result = await db.execute(
@@ -102,10 +142,17 @@ async def get_analytics(
     )
     hyros_confirmed_purchases = hyros_purchases_result.scalar() or 0
 
-    # Compute CPQC: ad_spend / qualified_conversations
+    # Compute CPQC: ad_spend / qualified_conversations.
+    # When a campaign is explicitly selected, $0 spend with qualified > 0 is a
+    # meaningful answer (organic-only window for that campaign), so render it
+    # as $0.00 rather than "—". Org-wide view keeps the "—" for $0 spend so
+    # we don't mislead with a falsely-cheap headline number.
     cpqc = None
-    if qualified_count > 0 and total_ad_spend > 0:
-        cpqc = round(total_ad_spend / qualified_count, 2)
+    if qualified_count > 0:
+        if total_ad_spend > 0:
+            cpqc = round(total_ad_spend / qualified_count, 2)
+        elif campaign_id:
+            cpqc = 0.0
 
     # Compute CCR: conversions / total_conversations
     ccr = None
@@ -121,8 +168,12 @@ async def get_analytics(
     funnel = _build_funnel(total_conversations, qualified_count, total_conversions)
 
     # Daily trends
-    cpqc_trend = await _compute_daily_cpqc_trend(db, org_id, date_from, date_to, filters)
-    ccr_trend = await _compute_daily_ccr_trend(db, org_id, date_from, date_to, filters)
+    cpqc_trend = await _compute_daily_cpqc_trend(
+        db, org_id, date_from, date_to, filters, campaign_id
+    )
+    ccr_trend = await _compute_daily_ccr_trend(
+        db, org_id, date_from, date_to, filters, campaign_id
+    )
 
     return AnalyticsResponse(
         date_from=date_from,
@@ -171,26 +222,96 @@ async def _compute_daily_cpqc_trend(
     date_from: date,
     date_to: date,
     filters: list,
+    campaign_id: str | None = None,
 ) -> list[DailyTrend]:
-    """Compute daily CPQC trend from daily_analytics."""
-    result = await db.execute(
-        select(
-            DailyAnalytics.date,
-            func.coalesce(func.sum(DailyAnalytics.ad_spend), 0).label("ad_spend"),
-            func.coalesce(func.sum(DailyAnalytics.new_conversations), 0).label("conversations"),
+    """Compute daily CPQC trend.
+
+    Always uses qualified subscribers as the denominator (same as the
+    headline CPQC card), so the chart agrees with the metric label.
+
+    Org-wide: daily ad_spend from daily_analytics (channel=NULL row) ÷
+    daily qualified subscribers (INTENT+).
+
+    Campaign-scoped: daily spend from CampaignMetric for the selected
+    campaign ÷ daily qualified subscribers (selected campaign OR organic).
+
+    Days where qualified == 0 OR spend == 0 emit value=None so the
+    frontend renders a gap instead of a misleading $0.
+    """
+    qualified_stages = [
+        BuyerStage.INTENT,
+        BuyerStage.PURCHASE,
+        BuyerStage.POST_PURCHASE,
+    ]
+    dt_from = datetime(date_from.year, date_from.month, date_from.day, tzinfo=timezone.utc)
+    dt_to = datetime(date_to.year, date_to.month, date_to.day, 23, 59, 59, tzinfo=timezone.utc)
+
+    if campaign_id:
+        spend_rows = await db.execute(
+            select(
+                CampaignMetric.date,
+                func.coalesce(func.sum(CampaignMetric.spend), 0).label("ad_spend"),
+            )
+            .where(
+                CampaignMetric.org_id == org_id,
+                CampaignMetric.level == "campaign",
+                CampaignMetric.meta_campaign_id == campaign_id,
+                CampaignMetric.date >= date_from,
+                CampaignMetric.date <= date_to,
+            )
+            .group_by(CampaignMetric.date)
         )
-        .where(and_(*filters))
-        .group_by(DailyAnalytics.date)
-        .order_by(DailyAnalytics.date)
-    )
-    rows = result.all()
-    trends = []
-    for row in rows:
-        # Simplified: use cost_per_conversation as proxy when qualified data unavailable per day
-        value = 0.0
-        if row.conversations and row.conversations > 0 and row.ad_spend:
-            value = round(float(row.ad_spend) / int(row.conversations), 2)
-        trends.append(DailyTrend(date=row.date, value=value))
+        spend_by_date = {r.date: float(r.ad_spend) for r in spend_rows.all()}
+
+        qualified_rows = await db.execute(
+            select(
+                func.date(Subscriber.created_at).label("d"),
+                func.count().label("qualified"),
+            )
+            .where(
+                Subscriber.org_id == org_id,
+                Subscriber.buyer_stage.in_(qualified_stages),
+                Subscriber.created_at >= dt_from,
+                Subscriber.created_at <= dt_to,
+                or_(Subscriber.campaign_id == campaign_id, Subscriber.campaign_id.is_(None)),
+            )
+            .group_by(func.date(Subscriber.created_at))
+        )
+    else:
+        spend_rows = await db.execute(
+            select(
+                DailyAnalytics.date,
+                func.coalesce(func.sum(DailyAnalytics.ad_spend), 0).label("ad_spend"),
+            )
+            .where(and_(*filters))
+            .group_by(DailyAnalytics.date)
+        )
+        spend_by_date = {r.date: float(r.ad_spend) for r in spend_rows.all()}
+
+        qualified_rows = await db.execute(
+            select(
+                func.date(Subscriber.created_at).label("d"),
+                func.count().label("qualified"),
+            )
+            .where(
+                Subscriber.org_id == org_id,
+                Subscriber.buyer_stage.in_(qualified_stages),
+                Subscriber.created_at >= dt_from,
+                Subscriber.created_at <= dt_to,
+            )
+            .group_by(func.date(Subscriber.created_at))
+        )
+
+    qualified_by_date = {r.d: int(r.qualified) for r in qualified_rows.all()}
+
+    trends: list[DailyTrend] = []
+    for d in sorted(set(spend_by_date) | set(qualified_by_date)):
+        spend = spend_by_date.get(d, 0.0)
+        q = qualified_by_date.get(d, 0)
+        if q > 0 and spend > 0:
+            trends.append(DailyTrend(date=d, value=round(spend / q, 2)))
+        else:
+            trends.append(DailyTrend(date=d, value=None))
     return trends
 
 
@@ -200,25 +321,87 @@ async def _compute_daily_ccr_trend(
     date_from: date,
     date_to: date,
     filters: list,
+    campaign_id: str | None = None,
 ) -> list[DailyTrend]:
-    """Compute daily CCR trend from daily_analytics."""
-    result = await db.execute(
-        select(
-            DailyAnalytics.date,
-            func.coalesce(func.sum(DailyAnalytics.conversions), 0).label("conversions"),
-            func.coalesce(func.sum(DailyAnalytics.new_conversations), 0).label("conversations"),
+    """Compute daily CCR trend.
+
+    Org-wide: from daily_analytics (channel=NULL combined row).
+    Campaign-scoped: counts conversions from ConversionEvent and
+    conversations from Conversation routed via Subscriber.campaign_id —
+    matches the per-campaign semantic used elsewhere (campaign + organic).
+
+    Days with no conversations emit value=None so the chart shows gaps
+    instead of misleading flat zeros.
+    """
+    if not campaign_id:
+        result = await db.execute(
+            select(
+                DailyAnalytics.date,
+                func.coalesce(func.sum(DailyAnalytics.conversions), 0).label("conversions"),
+                func.coalesce(func.sum(DailyAnalytics.new_conversations), 0).label("conversations"),
+            )
+            .where(and_(*filters))
+            .group_by(DailyAnalytics.date)
+            .order_by(DailyAnalytics.date)
         )
-        .where(and_(*filters))
-        .group_by(DailyAnalytics.date)
-        .order_by(DailyAnalytics.date)
+        rows = result.all()
+        trends: list[DailyTrend] = []
+        for row in rows:
+            convs = int(row.conversations) if row.conversations else 0
+            cnv = int(row.conversions) if row.conversions else 0
+            if convs > 0:
+                trends.append(DailyTrend(date=row.date, value=round(cnv / convs, 4)))
+            else:
+                trends.append(DailyTrend(date=row.date, value=None))
+        return trends
+
+    dt_from = datetime(date_from.year, date_from.month, date_from.day, tzinfo=timezone.utc)
+    dt_to = datetime(date_to.year, date_to.month, date_to.day, 23, 59, 59, tzinfo=timezone.utc)
+    activity_ts = func.coalesce(Conversation.last_activity_at, Conversation.created_at)
+
+    conv_rows = await db.execute(
+        select(
+            func.date(activity_ts).label("d"),
+            func.count().label("conversations"),
+        )
+        .select_from(Conversation)
+        .join(Subscriber, Subscriber.id == Conversation.subscriber_id)
+        .where(
+            Conversation.org_id == org_id,
+            activity_ts >= dt_from,
+            activity_ts <= dt_to,
+            or_(Subscriber.campaign_id == campaign_id, Subscriber.campaign_id.is_(None)),
+        )
+        .group_by(func.date(activity_ts))
     )
-    rows = result.all()
+    conversations_by_date = {r.d: int(r.conversations) for r in conv_rows.all()}
+
+    conversion_rows = await db.execute(
+        select(
+            func.date(ConversionEvent.created_at).label("d"),
+            func.count().label("converted"),
+        )
+        .where(
+            ConversionEvent.org_id == org_id,
+            ConversionEvent.created_at >= dt_from,
+            ConversionEvent.created_at <= dt_to,
+            or_(
+                ConversionEvent.meta_campaign_id == campaign_id,
+                ConversionEvent.meta_campaign_id.is_(None),
+            ),
+        )
+        .group_by(func.date(ConversionEvent.created_at))
+    )
+    converted_by_date = {r.d: int(r.converted) for r in conversion_rows.all()}
+
     trends = []
-    for row in rows:
-        value = 0.0
-        if row.conversations and row.conversations > 0:
-            value = round(int(row.conversions) / int(row.conversations), 4)
-        trends.append(DailyTrend(date=row.date, value=value))
+    for d in sorted(set(conversations_by_date) | set(converted_by_date)):
+        convs = conversations_by_date.get(d, 0)
+        cnv = converted_by_date.get(d, 0)
+        if convs > 0:
+            trends.append(DailyTrend(date=d, value=round(cnv / convs, 4)))
+        else:
+            trends.append(DailyTrend(date=d, value=None))
     return trends
 
 
@@ -227,49 +410,100 @@ async def get_roi(
     org_id: uuid.UUID,
     date_from: date,
     date_to: date,
+    campaign_id: str | None = None,
 ) -> ROIResponse:
-    """Compute ROI / money metrics."""
+    """Compute ROI / money metrics.
 
-    filters = [
-        DailyAnalytics.org_id == org_id,
-        DailyAnalytics.date >= date_from,
-        DailyAnalytics.date <= date_to,
-    ]
+    When campaign_id is supplied, spend is taken from CampaignMetric for that
+    campaign (matching the dropdown label and the CPQC card), and conversions
+    /revenue/qualified are counted for that campaign plus organic
+    (campaign_id IS NULL) — the same "incl. organic at $0" semantic CPQC uses.
+    Without campaign_id, ROI is org-wide and reads from daily_analytics.
+    """
 
-    agg_result = await db.execute(
-        select(
-            func.coalesce(func.sum(DailyAnalytics.ad_spend), 0).label("ad_spend"),
-            func.coalesce(func.sum(DailyAnalytics.conversions), 0).label("converted_count"),
-            func.coalesce(func.sum(DailyAnalytics.conversion_value), 0).label("revenue"),
-        ).where(and_(*filters))
-    )
-    row = agg_result.one()
+    dt_from = datetime(date_from.year, date_from.month, date_from.day, tzinfo=timezone.utc)
+    dt_to = datetime(date_to.year, date_to.month, date_to.day, 23, 59, 59, tzinfo=timezone.utc)
 
-    ad_spend = float(row.ad_spend)
-    conversations_count = await _count_conversations_raw(db, org_id, date_from, date_to)
-    converted_count = int(row.converted_count)
-    revenue = float(row.revenue)
+    if campaign_id:
+        # ── Spend from campaign_metrics (same source as the dropdown) ────
+        spend_result = await db.execute(
+            select(func.coalesce(func.sum(CampaignMetric.spend), 0))
+            .where(
+                CampaignMetric.org_id == org_id,
+                CampaignMetric.level == "campaign",
+                CampaignMetric.meta_campaign_id == campaign_id,
+                CampaignMetric.date >= date_from,
+                CampaignMetric.date <= date_to,
+            )
+        )
+        ad_spend = float(spend_result.scalar() or 0)
+
+        # ── Conversions + revenue from ConversionEvent (campaign + organic) ──
+        conv_result = await db.execute(
+            select(
+                func.count().label("converted_count"),
+                func.coalesce(func.sum(ConversionEvent.value), 0).label("revenue"),
+            )
+            .where(
+                ConversionEvent.org_id == org_id,
+                ConversionEvent.created_at >= dt_from,
+                ConversionEvent.created_at <= dt_to,
+                or_(
+                    ConversionEvent.meta_campaign_id == campaign_id,
+                    ConversionEvent.meta_campaign_id.is_(None),
+                ),
+            )
+        )
+        conv_row = conv_result.one()
+        converted_count = int(conv_row.converted_count)
+        revenue = float(conv_row.revenue)
+
+        # ── Conversations: count via subscribers attributed to the campaign ──
+        conversations_count = await _count_conversations_for_campaign(
+            db, org_id, dt_from, dt_to, campaign_id
+        )
+    else:
+        # Org-wide: read from daily_analytics on the channel=NULL combined row.
+        filters = [
+            DailyAnalytics.org_id == org_id,
+            DailyAnalytics.date >= date_from,
+            DailyAnalytics.date <= date_to,
+            DailyAnalytics.channel.is_(None),
+        ]
+        agg_result = await db.execute(
+            select(
+                func.coalesce(func.sum(DailyAnalytics.ad_spend), 0).label("ad_spend"),
+                func.coalesce(func.sum(DailyAnalytics.conversions), 0).label("converted_count"),
+                func.coalesce(func.sum(DailyAnalytics.conversion_value), 0).label("revenue"),
+            ).where(and_(*filters))
+        )
+        row = agg_result.one()
+        ad_spend = float(row.ad_spend)
+        converted_count = int(row.converted_count)
+        revenue = float(row.revenue)
+        conversations_count = await _count_conversations_raw(db, org_id, date_from, date_to)
 
     cost_per_conversation = round(ad_spend / conversations_count, 2) if conversations_count > 0 and ad_spend > 0 else None
 
-    # Count qualified subscribers in the date range
-    dt_from = datetime(date_from.year, date_from.month, date_from.day, tzinfo=timezone.utc)
-    dt_to = datetime(date_to.year, date_to.month, date_to.day, 23, 59, 59, tzinfo=timezone.utc)
     qualified_stages = [
-        BuyerStage.CONSIDERATION,
         BuyerStage.INTENT,
         BuyerStage.PURCHASE,
         BuyerStage.POST_PURCHASE,
     ]
+    qualified_filters = [
+        Subscriber.org_id == org_id,
+        Subscriber.buyer_stage.in_(qualified_stages),
+        Subscriber.created_at >= dt_from,
+        Subscriber.created_at <= dt_to,
+    ]
+    if campaign_id:
+        qualified_filters.append(
+            or_(Subscriber.campaign_id == campaign_id, Subscriber.campaign_id.is_(None))
+        )
     qualified_result = await db.execute(
         select(func.count())
         .select_from(Subscriber)
-        .where(
-            Subscriber.org_id == org_id,
-            Subscriber.buyer_stage.in_(qualified_stages),
-            Subscriber.created_at >= dt_from,
-            Subscriber.created_at <= dt_to,
-        )
+        .where(*qualified_filters)
     )
     qualified_count = qualified_result.scalar() or 0
 
@@ -290,6 +524,7 @@ async def get_roi(
             DailyAnalytics.org_id == org_id,
             DailyAnalytics.date >= date_from,
             DailyAnalytics.date < midpoint,
+            DailyAnalytics.channel.is_(None),
         )
     )
     baseline = baseline_result.one()
@@ -303,6 +538,7 @@ async def get_roi(
             DailyAnalytics.org_id == org_id,
             DailyAnalytics.date >= midpoint,
             DailyAnalytics.date <= date_to,
+            DailyAnalytics.channel.is_(None),
         )
     )
     current = current_result.one()
@@ -339,10 +575,12 @@ async def get_ai_performance(
 ) -> AIPerformanceResponse:
     """Compute AI performance metrics."""
 
+    # Combined channel=NULL row only — see get_analytics for double-counting context.
     filters = [
         DailyAnalytics.org_id == org_id,
         DailyAnalytics.date >= date_from,
         DailyAnalytics.date <= date_to,
+        DailyAnalytics.channel.is_(None),
     ]
 
     agg_result = await db.execute(
@@ -422,6 +660,35 @@ async def _count_conversations_raw(
             pass
 
     result = await db.execute(query)
+    return int(result.scalar() or 0)
+
+
+async def _count_conversations_for_campaign(
+    db: AsyncSession,
+    org_id: uuid.UUID,
+    dt_from: datetime,
+    dt_to: datetime,
+    campaign_id: str,
+) -> int:
+    """Count conversations whose subscriber is attributed to this campaign or organic.
+
+    Conversations don't carry a direct campaign attribution, so we route through
+    Subscriber.campaign_id (which holds the meta_campaign_id string). Organic
+    conversations (campaign_id IS NULL) are included to match the CPQC and
+    qualified-count semantics used elsewhere in the per-campaign view.
+    """
+    activity_ts = func.coalesce(Conversation.last_activity_at, Conversation.created_at)
+    result = await db.execute(
+        select(func.count())
+        .select_from(Conversation)
+        .join(Subscriber, Subscriber.id == Conversation.subscriber_id)
+        .where(
+            Conversation.org_id == org_id,
+            activity_ts >= dt_from,
+            activity_ts <= dt_to,
+            or_(Subscriber.campaign_id == campaign_id, Subscriber.campaign_id.is_(None)),
+        )
+    )
     return int(result.scalar() or 0)
 
 

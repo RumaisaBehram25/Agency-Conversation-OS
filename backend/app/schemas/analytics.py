@@ -18,10 +18,15 @@ class FunnelStep(BaseModel):
 
 
 class DailyTrend(BaseModel):
-    """Single data point in a daily trend array."""
+    """Single data point in a daily trend array.
+
+    value=None means "no data for this day" — frontend should render
+    this as a gap in the line, not a flat zero, so paused-campaign and
+    no-traffic days don't read as legitimate $0 / 0% values.
+    """
 
     date: date
-    value: float
+    value: float | None = None
 
 
 class AnalyticsResponse(BaseModel):

@@ -11,9 +11,10 @@ org, populating daily_analytics / campaign_metrics / campaign_breakdowns.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import uuid
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
 from sqlalchemy import select
@@ -44,6 +45,39 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 _ENCRYPTED_META_FIELDS = {"meta_capi_token"}
+
+# In-memory per-org sync status. Lives only in this process; a restart drops
+# the history and a multi-replica deployment would need Redis or a DB-backed
+# table instead. Acceptable for single-instance dev / small prod.
+_SYNC_STATUS: dict[uuid.UUID, dict] = {}
+_SYNC_STATUS_LOCK = asyncio.Lock()
+
+
+async def _record_sync_started(org_id: uuid.UUID, days_back: int, granular: bool) -> str:
+    """Mark a sync as in-progress for this org and return a run id."""
+    run_id = uuid.uuid4().hex
+    async with _SYNC_STATUS_LOCK:
+        _SYNC_STATUS[org_id] = {
+            "run_id": run_id,
+            "started_at": datetime.now(timezone.utc).isoformat(),
+            "finished_at": None,
+            "in_progress": True,
+            "days_back": days_back,
+            "granular": granular,
+            "summary": None,
+        }
+    return run_id
+
+
+async def _record_sync_finished(org_id: uuid.UUID, run_id: str, summary: dict) -> None:
+    async with _SYNC_STATUS_LOCK:
+        current = _SYNC_STATUS.get(org_id)
+        # Only overwrite if this run is still the latest — protects against a
+        # newer run starting while an older one was still wrapping up.
+        if current and current.get("run_id") == run_id:
+            current["finished_at"] = datetime.now(timezone.utc).isoformat()
+            current["in_progress"] = False
+            current["summary"] = summary
 
 
 async def _require_admin(
@@ -235,17 +269,35 @@ async def _auto_import_meta_campaigns(
     return inserted
 
 
-async def _run_sync_in_background(
+async def _run_meta_sync_and_record(
     org_id: uuid.UUID,
+    run_id: str,
     ad_account_id: str,
     encrypted_token: str,
     days_back: int,
     granular: bool,
 ) -> None:
+    """Background entrypoint — runs the sync and records the result."""
+    summary = await _run_meta_sync(
+        org_id, ad_account_id, encrypted_token, days_back, granular
+    )
+    await _record_sync_finished(org_id, run_id, summary)
+
+
+async def _run_meta_sync(
+    org_id: uuid.UUID,
+    ad_account_id: str,
+    encrypted_token: str,
+    days_back: int,
+    granular: bool,
+) -> dict:
     """
     Auto-import campaigns, then run sync_ad_spend with a fresh session
-    outside the request lifecycle.
+    outside the request lifecycle. Returns a summary including the
+    auto-import count so the caller can surface it to the user.
     """
+    summary: dict = {"campaigns_imported": 0, "errors": []}
+
     async with async_session_factory() as session:
         try:
             if granular:
@@ -254,22 +306,61 @@ async def _run_sync_in_background(
                     imported = await _auto_import_meta_campaigns(
                         session, org_id, ad_account_id, access_token
                     )
+                    summary["campaigns_imported"] = imported
                     if imported:
                         await session.commit()
-                except Exception:
+                except Exception as exc:
                     logger.exception(
                         "Auto-import of Meta campaigns failed for org %s; "
                         "continuing with sync on existing registrations",
                         org_id,
                     )
+                    summary["errors"].append(f"auto-import failed: {exc}")
                     await session.rollback()
 
             result = await sync_ad_spend(
-                session, days_back=days_back, granular=granular
+                session,
+                days_back=days_back,
+                granular=granular,
+                org_id=org_id,
             )
             logger.info("sync-now completed: %s", result)
-        except Exception:
+            summary.update(
+                {
+                    "campaigns_synced": result.get("campaigns_synced", 0),
+                    "adsets_synced": result.get("adsets_synced", 0),
+                    "ads_synced": result.get("ads_synced", 0),
+                    "dates_updated": result.get("dates_updated", 0),
+                    "total_spend": result.get("total_spend", 0.0),
+                }
+            )
+            sync_errors = result.get("errors") or []
+            if sync_errors:
+                summary["errors"].extend(sync_errors)
+        except Exception as exc:
             logger.exception("sync-now failed")
+            summary["errors"].append(f"sync failed: {exc}")
+
+    return summary
+
+
+def _build_message(days_back: int, granular: bool, summary: dict) -> str:
+    errors = summary.get("errors") or []
+    parts = [f"Meta sync complete for the last {days_back} day(s)."]
+    imported = summary.get("campaigns_imported") or 0
+    if imported:
+        parts.append(f"Imported {imported} new campaign(s).")
+    synced = summary.get("campaigns_synced") or 0
+    if synced:
+        parts.append(f"Updated metrics on {synced} campaign(s).")
+    elif granular and not imported and not errors:
+        parts.append(
+            "No campaigns returned from Meta — check the ad account id and "
+            "that the access token has ads_read permission."
+        )
+    if errors:
+        parts.append(f"Errors: {'; '.join(errors)}")
+    return " ".join(parts)
 
 
 @router.post(
@@ -285,10 +376,11 @@ async def meta_sync_now(
     db: AsyncSession = Depends(get_db),
 ) -> MetaSyncNowResponse:
     """
-    Trigger a Meta Marketing API sync for the current org in the background.
-
-    Populates daily_analytics, campaign_metrics, campaign_breakdowns, and
-    ad_campaigns from the configured ad account. Requires owner or admin.
+    Trigger a Meta Marketing API sync for the current org in the background
+    and return immediately. Granular syncs against accounts with many
+    campaigns can take 5–15 minutes; holding an HTTP request open that long
+    is fragile (proxy timeouts, browser tab close, etc.), so the work runs
+    detached and the client polls /meta/sync-status for results.
     """
     await _require_admin(db, current_user.id, org_id)
 
@@ -309,9 +401,25 @@ async def meta_sync_now(
             ),
         )
 
+    # Reject if a sync is already in flight for this org — prevents the
+    # frontend's accidental double-click from spawning two parallel runs
+    # against the same Meta credentials and ad account.
+    async with _SYNC_STATUS_LOCK:
+        current = _SYNC_STATUS.get(org.id)
+        if current and current.get("in_progress"):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    "A Meta sync is already running for this organization. "
+                    "Wait for it to finish (poll /meta/sync-status) before starting another."
+                ),
+            )
+
+    run_id = await _record_sync_started(org.id, body.days_back, body.granular)
     background_tasks.add_task(
-        _run_sync_in_background,
+        _run_meta_sync_and_record,
         org.id,
+        run_id,
         org.meta_ad_account_id,
         org.meta_capi_token,
         body.days_back,
@@ -324,6 +432,32 @@ async def meta_sync_now(
         granular=body.granular,
         message=(
             f"Meta sync started for the last {body.days_back} day(s). "
-            "Analytics data will refresh in ~30–90 seconds."
+            "Polling for results — this can take a few minutes."
         ),
     )
+
+
+@router.get("/meta/sync-status")
+async def meta_sync_status(
+    current_user: User = Depends(get_current_user),
+    org_id: uuid.UUID = Depends(get_org_id),
+) -> dict:
+    """
+    Return the latest sync status for the current org. Frontend polls this
+    while a sync is in progress; once `in_progress` flips to false the
+    `summary` and `message` fields describe the outcome.
+
+    Returns {} when this org has never run a sync in the current process.
+    """
+    async with _SYNC_STATUS_LOCK:
+        status_record = _SYNC_STATUS.get(org_id)
+        if status_record is None:
+            return {}
+        record = dict(status_record)
+
+    summary = record.get("summary") or {}
+    if record.get("finished_at") and summary:
+        record["message"] = _build_message(
+            record["days_back"], record["granular"], summary
+        )
+    return record

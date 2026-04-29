@@ -21,12 +21,14 @@ from app.models.user import User
 from app.schemas.analytics import (
     AIPerformanceResponse,
     AnalyticsResponse,
+    ManyChatFlowStatsResponse,
     ROIResponse,
 )
 from app.services.analytics_service import (
     get_ai_performance,
     get_analytics,
     get_analytics_export_data,
+    get_manychat_flow_stats,
     get_roi,
 )
 from app.api.deps import get_current_user, get_org_id
@@ -43,6 +45,7 @@ async def analytics_overview(
     date_to: date = Query(default_factory=date.today),
     channel: str | None = Query(None),
     campaign_id: str | None = Query(None),
+    organic: bool = Query(False),
 ) -> AnalyticsResponse:
     """
     Get aggregated analytics metrics for a date range.
@@ -50,9 +53,11 @@ async def analytics_overview(
     Returns CPQC, CCR, avg response time, qualification rate,
     funnel data, and daily trends. When campaign_id is provided,
     CPQC is scoped to that campaign plus organic (no-attribution)
-    qualifications, with organic counted at $0 spend.
+    qualifications, with organic counted at $0 spend. When organic=true,
+    metrics are scoped to subscribers with post_id populated AND ad_id NULL,
+    and a per-post_id breakdown is included in `organic_posts`.
     """
-    return await get_analytics(db, org_id, date_from, date_to, channel, campaign_id)
+    return await get_analytics(db, org_id, date_from, date_to, channel, campaign_id, organic)
 
 
 @router.get("/roi", response_model=ROIResponse)
@@ -90,6 +95,22 @@ async def analytics_ai_performance(
     total tokens, and total AI cost.
     """
     return await get_ai_performance(db, org_id, date_from, date_to)
+
+
+@router.get("/manychat-flow-stats", response_model=ManyChatFlowStatsResponse)
+async def analytics_manychat_flow_stats(
+    current_user: User = Depends(get_current_user),
+    org_id: uuid.UUID = Depends(get_org_id),
+    db: AsyncSession = Depends(get_db),
+    channel: str = Query(default="all"),
+) -> ManyChatFlowStatsResponse:
+    """
+    Get engagement stats for two configured ManyChat workflows.
+
+    Returns sent/clicked counts and subscriber drill-down lists using
+    webhook-captured events.
+    """
+    return await get_manychat_flow_stats(db, org_id, channel)
 
 
 @router.get("/export")

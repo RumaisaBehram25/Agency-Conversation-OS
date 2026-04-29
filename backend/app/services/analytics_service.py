@@ -5,10 +5,13 @@ Computes CPQC, CCR, funnel data, trends, ROI, AI performance,
 and campaign health from DailyAnalytics + raw tables.
 """
 
+import logging
+import os
 import uuid
 from datetime import date, datetime, timedelta, timezone
 
-from sqlalchemy import func, select, and_, or_, case
+import httpx
+from sqlalchemy import and_, case, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.analytics import DailyAnalytics
@@ -16,16 +19,132 @@ from app.models.campaign_metrics import CampaignMetric
 from app.models.conversation import Conversation
 from app.models.conversion import ConversionEvent
 from app.models.message import Message
+from app.models.organization import Organization
 from app.models.subscriber import Subscriber
+from app.models.manychat_event import ManyChatEvent
 from app.models.base import BuyerStage, ChannelType, ConversationStatus
+from app.security.encryption import decrypt_value
 from app.schemas.analytics import (
     AIPerformanceResponse,
     AnalyticsResponse,
     DailyTrend,
     FunnelStep,
+    ManyChatFlowStat,
+    ManyChatFlowStatsResponse,
+    ManyChatMetricCard,
+    ManyChatMetricSubscriber,
+    OrganicPostBreakdown,
     ROIResponse,
 )
 from app.schemas.dashboard import CampaignHealth
+
+_MANYCHAT_API_BASE = "https://api.manychat.com"
+_MANYCHAT_TARGET_PAGE_ID = "967183323615679"
+logger = logging.getLogger(__name__)
+
+
+def _coerce_int(value) -> int:
+    if value is None:
+        return 0
+    if isinstance(value, bool):
+        return int(value)
+    if isinstance(value, (int, float)):
+        return int(value)
+    if isinstance(value, str):
+        s = value.strip().replace(",", "")
+        if s.isdigit():
+            return int(s)
+    return 0
+
+
+def _extract_metric_count(flow_obj: dict, metric: str) -> int:
+    """Try several common key patterns used in stats payloads."""
+    candidates = [
+        metric,
+        f"{metric}_count",
+        f"{metric}Count",
+        f"{metric}_total",
+        f"total_{metric}",
+        f"{metric}ed" if metric == "open" else "",
+    ]
+    stats = flow_obj.get("stats")
+    if isinstance(stats, dict):
+        for key in candidates:
+            if not key:
+                continue
+            v = stats.get(key)
+            if isinstance(v, dict):
+                count_val = v.get("count") if "count" in v else v.get("total")
+                c = _coerce_int(count_val)
+                if c:
+                    return c
+            c = _coerce_int(v)
+            if c:
+                return c
+    for key in candidates:
+        if not key:
+            continue
+        v = flow_obj.get(key)
+        if isinstance(v, dict):
+            count_val = v.get("count") if "count" in v else v.get("total")
+            c = _coerce_int(count_val)
+            if c:
+                return c
+        c = _coerce_int(v)
+        if c:
+            return c
+    return 0
+
+
+def _extract_metric_subscriber_ids(flow_obj: dict, metric: str) -> list[str]:
+    """Extract subscriber IDs for a metric when ManyChat provides drill-down arrays."""
+    out: list[str] = []
+    candidate_keys = [
+        f"{metric}_subscriber_ids",
+        f"{metric}SubscriberIds",
+        f"{metric}_subscribers",
+        f"{metric}Subscribers",
+        f"{metric}_users",
+        f"{metric}Users",
+    ]
+    pools: list = [flow_obj]
+    if isinstance(flow_obj.get("stats"), dict):
+        pools.append(flow_obj["stats"])
+    for pool in pools:
+        if not isinstance(pool, dict):
+            continue
+        for key in candidate_keys:
+            raw = pool.get(key)
+            if not isinstance(raw, list):
+                continue
+            for item in raw:
+                if isinstance(item, (str, int)):
+                    out.append(str(item))
+                elif isinstance(item, dict):
+                    sid = item.get("subscriber_id") or item.get("id") or item.get("user_id")
+                    if sid is not None:
+                        out.append(str(sid))
+    # Preserve order, unique
+    seen: set[str] = set()
+    deduped: list[str] = []
+    for sid in out:
+        if sid in seen:
+            continue
+        seen.add(sid)
+        deduped.append(sid)
+    return deduped
+
+
+def _parse_json_or_text(resp: httpx.Response) -> dict:
+    if not resp.content:
+        return {}
+    try:
+        parsed = resp.json()
+        if isinstance(parsed, dict):
+            return parsed
+        return {"raw_json": parsed}
+    except ValueError:
+        return {"raw_text": resp.text[:2000] if resp.text else ""}
 
 
 async def get_analytics(
@@ -35,8 +154,12 @@ async def get_analytics(
     date_to: date,
     channel: str | None = None,
     campaign_id: str | None = None,
+    organic: bool = False,
 ) -> AnalyticsResponse:
     """Compute aggregated analytics metrics for a date range."""
+
+    if organic:
+        return await _get_analytics_for_organic(db, org_id, date_from, date_to, channel)
 
     # Base filter for daily_analytics.
     #
@@ -191,6 +314,267 @@ async def get_analytics(
         cpqc_trend=cpqc_trend,
         ccr_trend=ccr_trend,
     )
+
+
+async def _get_analytics_for_organic(
+    db: AsyncSession,
+    org_id: uuid.UUID,
+    date_from: date,
+    date_to: date,
+    organic_channel: str | None = None,
+) -> AnalyticsResponse:
+    """Compute analytics metrics scoped to organic traffic — ALL-TIME.
+
+    Organic = subscribers whose post_id is populated AND ad_id is NULL.
+    Date-range filters are intentionally omitted: organic metrics always
+    reflect the full historical dataset so they are unaffected by the date
+    picker selected on the Analytics page.
+
+    ``organic_channel`` optionally restricts to a single channel
+    (``instagram``, ``messenger``).  Defaults to all channels.
+
+    NOTE: "total conversations" is deliberately counted from the Subscriber
+    table, not from the Conversation table.  Subscribers imported via DB
+    migration may not have a corresponding Conversation row yet, but they
+    are still valid organic leads and must appear in the counts.
+    """
+    # Organic = post_id is populated AND ad_id is unset. ManyChat sometimes
+    # writes empty strings instead of NULLs for missing custom fields, so
+    # treat "" as null on both sides.
+    organic_subscriber_filter = and_(
+        Subscriber.post_id.is_not(None),
+        func.coalesce(Subscriber.post_id, "") != "",
+        Subscriber.post_id.not_like("legacy_%"),
+        Subscriber.post_id.not_like("seed_%"),
+        or_(Subscriber.ad_id.is_(None), Subscriber.ad_id == ""),
+    )
+
+    # Optional per-channel restriction.
+    channel_filter = []
+    resolved_channel: ChannelType | None = None
+    if organic_channel and organic_channel not in ("all", ""):
+        try:
+            resolved_channel = ChannelType(organic_channel.lower())
+            channel_filter = [Subscriber.channel == resolved_channel]
+        except ValueError:
+            pass  # Unknown channel value — treat as "all"
+
+    # --- Total organic subscribers (used as "conversations" proxy) ----------
+    # We count Subscribers directly so that migrated rows without a
+    # Conversation record are included.
+    total_conversations_result = await db.execute(
+        select(func.count())
+        .select_from(Subscriber)
+        .where(
+            Subscriber.org_id == org_id,
+            organic_subscriber_filter,
+            *channel_filter,
+        )
+    )
+    total_conversations = int(total_conversations_result.scalar() or 0)
+
+    # Conversions for organic — no date filter, all-time.
+    conversion_result = await db.execute(
+        select(
+            func.count().label("converted"),
+            func.coalesce(func.sum(ConversionEvent.value), 0).label("revenue"),
+        )
+        .select_from(ConversionEvent)
+        .join(Subscriber, Subscriber.id == ConversionEvent.subscriber_id)
+        .where(
+            ConversionEvent.org_id == org_id,
+            organic_subscriber_filter,
+            *channel_filter,
+        )
+    )
+    conversion_row = conversion_result.one()
+    total_conversions = int(conversion_row.converted)
+    total_revenue = float(conversion_row.revenue)
+
+    qualified_stages = [
+        BuyerStage.INTENT,
+        BuyerStage.PURCHASE,
+        BuyerStage.POST_PURCHASE,
+    ]
+
+    # Qualified leads — no date filter, all-time.
+    qualified_result = await db.execute(
+        select(func.count())
+        .select_from(Subscriber)
+        .where(
+            Subscriber.org_id == org_id,
+            Subscriber.buyer_stage.in_(qualified_stages),
+            organic_subscriber_filter,
+            *channel_filter,
+        )
+    )
+    qualified_count = int(qualified_result.scalar() or 0)
+
+    # Hyros-confirmed purchases — no date filter, all-time.
+    hyros_result = await db.execute(
+        select(func.count())
+        .select_from(Subscriber)
+        .where(
+            Subscriber.org_id == org_id,
+            Subscriber.hyros_purchased.is_(True),
+            organic_subscriber_filter,
+            *channel_filter,
+        )
+    )
+    hyros_confirmed_purchases = int(hyros_result.scalar() or 0)
+
+    # Avg AI response time — pulled through Conversation to reach Messages.
+    # Falls back to None gracefully when no messages exist yet.
+    avg_response_result = await db.execute(
+        select(func.avg(Message.ai_response_time_ms))
+        .select_from(Message)
+        .join(Conversation, Conversation.id == Message.conversation_id)
+        .join(Subscriber, Subscriber.id == Conversation.subscriber_id)
+        .where(
+            Conversation.org_id == org_id,
+            Message.ai_response_time_ms.is_not(None),
+            organic_subscriber_filter,
+            *channel_filter,
+        )
+    )
+    avg_response_time_ms = avg_response_result.scalar()
+    avg_response_time_ms = int(avg_response_time_ms) if avg_response_time_ms else None
+
+    cpqc = 0.0 if qualified_count > 0 else None
+
+    ccr = None
+    if total_conversations > 0:
+        ccr = round(total_conversions / total_conversations, 4)
+
+    qualification_rate = None
+    if total_conversations > 0:
+        qualification_rate = round(qualified_count / total_conversations, 4)
+
+    funnel = _build_funnel(total_conversations, qualified_count, total_conversions)
+
+    organic_posts = await _build_organic_posts_breakdown(
+        db, org_id, organic_subscriber_filter, qualified_stages, channel_filter
+    )
+
+    return AnalyticsResponse(
+        date_from=date_from,
+        date_to=date_to,
+        channel=resolved_channel.value if resolved_channel else None,
+        cpqc=cpqc,
+        ccr=ccr,
+        avg_response_time_ms=avg_response_time_ms,
+        qualification_rate=qualification_rate,
+        hyros_confirmed_purchases=hyros_confirmed_purchases,
+        total_conversations=total_conversations,
+        total_conversions=total_conversions,
+        total_revenue=total_revenue,
+        funnel=funnel,
+        cpqc_trend=[],
+        ccr_trend=[],
+        organic_posts=organic_posts,
+    )
+
+
+async def _build_organic_posts_breakdown(
+    db: AsyncSession,
+    org_id: uuid.UUID,
+    organic_subscriber_filter,
+    qualified_stages: list[BuyerStage],
+    channel_filter: list | None = None,
+) -> list[OrganicPostBreakdown]:
+    """Group organic conversation/qualified/converted volumes by post_id and channel.
+
+    All-time counts — no date window applied.
+    Conversations = distinct organic Subscriber rows per post_id (not
+    Conversation rows), so migrated subscribers without a Conversation
+    record are still counted.
+    """
+    cf = channel_filter or []
+
+    # Subscribers per (channel, post) — all-time (our proxy for "conversations").
+    conv_rows = await db.execute(
+        select(
+            Subscriber.channel.label("channel"),
+            Subscriber.post_id.label("post_id"),
+            func.count().label("conversations"),
+        )
+        .select_from(Subscriber)
+        .where(
+            Subscriber.org_id == org_id,
+            organic_subscriber_filter,
+            *cf,
+        )
+        .group_by(Subscriber.channel, Subscriber.post_id)
+    )
+    conversations_by_post = {
+        (r.channel.value if r.channel else None, r.post_id): int(r.conversations)
+        for r in conv_rows.all()
+    }
+
+    # Qualified leads per (channel, post) — all-time.
+    qual_rows = await db.execute(
+        select(
+            Subscriber.channel.label("channel"),
+            Subscriber.post_id.label("post_id"),
+            func.count().label("qualified"),
+        )
+        .where(
+            Subscriber.org_id == org_id,
+            Subscriber.buyer_stage.in_(qualified_stages),
+            organic_subscriber_filter,
+            *cf,
+        )
+        .group_by(Subscriber.channel, Subscriber.post_id)
+    )
+    qualified_by_post = {
+        (r.channel.value if r.channel else None, r.post_id): int(r.qualified)
+        for r in qual_rows.all()
+    }
+
+    # Conversions per (channel, post) — all-time.
+    conv_event_rows = await db.execute(
+        select(
+            Subscriber.channel.label("channel"),
+            Subscriber.post_id.label("post_id"),
+            func.count().label("converted"),
+        )
+        .select_from(ConversionEvent)
+        .join(Subscriber, Subscriber.id == ConversionEvent.subscriber_id)
+        .where(
+            ConversionEvent.org_id == org_id,
+            organic_subscriber_filter,
+            *cf,
+        )
+        .group_by(Subscriber.channel, Subscriber.post_id)
+    )
+    converted_by_post = {
+        (r.channel.value if r.channel else None, r.post_id): int(r.converted)
+        for r in conv_event_rows.all()
+    }
+
+    all_post_keys = set(conversations_by_post) | set(qualified_by_post) | set(converted_by_post)
+
+    rows: list[OrganicPostBreakdown] = []
+    for channel, pid in all_post_keys:
+        conversations = conversations_by_post.get((channel, pid), 0)
+        qualified = qualified_by_post.get((channel, pid), 0)
+        converted = converted_by_post.get((channel, pid), 0)
+        qualification_rate = round(qualified / conversations, 4) if conversations > 0 else None
+        conversion_rate = round(converted / conversations, 4) if conversations > 0 else None
+        rows.append(
+            OrganicPostBreakdown(
+                post_id=pid,
+                channel=channel,
+                conversations=conversations,
+                qualified=qualified,
+                converted=converted,
+                qualification_rate=qualification_rate,
+                conversion_rate=conversion_rate,
+            )
+        )
+
+    rows.sort(key=lambda r: (r.conversations, r.converted), reverse=True)
+    return rows
 
 
 def _build_funnel(
@@ -627,6 +1011,381 @@ async def get_ai_performance(
         avg_response_time_ms=avg_response_time_ms,
         total_ai_tokens=total_ai_tokens,
         total_ai_cost=total_ai_cost,
+    )
+
+
+async def get_manychat_flow_stats(
+    db: AsyncSession,
+    org_id: uuid.UUID,
+    channel: str = "all",
+) -> ManyChatFlowStatsResponse:
+    """Fetch engagement metrics for two specific ManyChat workflows."""
+    normalized_channel = (channel or "all").lower()
+    if normalized_channel not in {"all", "instagram", "messenger"}:
+        normalized_channel = "all"
+
+    org_result = await db.execute(
+        select(
+            Organization.manychat_api_key,
+            Organization.manychat_page_id,
+        ).where(Organization.id == org_id)
+    )
+    org_row = org_result.one_or_none()
+    if org_row is None:
+        return ManyChatFlowStatsResponse(
+            channel=normalized_channel,
+            available=False,
+            message="Organization not found.",
+        )
+
+    encrypted_key = org_row.manychat_api_key
+    configured_page_id = org_row.manychat_page_id
+    if not encrypted_key:
+        return ManyChatFlowStatsResponse(
+            page_id=configured_page_id,
+            channel=normalized_channel,
+            available=False,
+            message="ManyChat API key is not configured in Settings.",
+        )
+
+    try:
+        manychat_api_key = decrypt_value(encrypted_key)
+    except Exception:
+        return ManyChatFlowStatsResponse(
+            page_id=configured_page_id,
+            channel=normalized_channel,
+            available=False,
+            message="ManyChat API key could not be decrypted.",
+        )
+
+    page_id = configured_page_id or _MANYCHAT_TARGET_PAGE_ID
+    headers = {
+        "Authorization": f"Bearer {manychat_api_key}",
+        "Accept": "application/json",
+    }
+    url = f"{_MANYCHAT_API_BASE}/fb/page/getFlows"
+
+    try:
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            resp = await client.get(url, headers=headers)
+        payload = resp.json() if resp.content else {}
+    except Exception:
+        return ManyChatFlowStatsResponse(
+            page_id=page_id,
+            channel=normalized_channel,
+            available=False,
+            message="ManyChat API request failed while fetching flows.",
+        )
+
+    logger.info(
+        "ManyChat getFlows raw response: status=%s body=%s",
+        resp.status_code,
+        payload if isinstance(payload, dict) else str(payload)[:2000],
+    )
+
+    if resp.status_code >= 400:
+        message = payload.get("message") if isinstance(payload, dict) else None
+        return ManyChatFlowStatsResponse(
+            page_id=page_id,
+            channel=normalized_channel,
+            available=False,
+            message=message or f"ManyChat API returned HTTP {resp.status_code}.",
+        )
+
+    raw_flows = []
+    if isinstance(payload, dict):
+        maybe_data = payload.get("data")
+        if isinstance(maybe_data, list):
+            raw_flows = maybe_data
+        elif isinstance(maybe_data, dict) and isinstance(maybe_data.get("flows"), list):
+            raw_flows = maybe_data["flows"]
+        elif isinstance(payload.get("flows"), list):
+            raw_flows = payload["flows"]
+
+    flow_ids = []
+    for item in raw_flows:
+        if not isinstance(item, dict):
+            continue
+        flow_ids.append(
+            str(item.get("id") or item.get("flow_ns") or item.get("ns") or "")
+        )
+    logger.info("ManyChat getFlows discovered flow IDs: %s", [f for f in flow_ids if f])
+
+    flow_rows: list[ManyChatFlowStat] = []
+    metric_subscriber_ids: dict[str, list[str]] = {
+        "sent": [],
+        "clicked": [],
+    }
+    metric_source_by_key: dict[str, str] = {
+        "sent": "attora_events",
+        "clicked": "attora_events",
+    }
+
+    requested_channels = ["instagram", "messenger"] if normalized_channel == "all" else [normalized_channel]
+    preferred_flow_ids_by_channel = {
+        "instagram": "content20260318143714_718544",
+        "messenger": "content20260427224734_091419",
+    }
+
+    async def _probe_manychat_endpoints(flow_id: str, channel_name: str) -> dict[str, dict]:
+        """
+        Probe potential ManyChat endpoints and return parsed payloads.
+        Raw responses are always logged to aid endpoint discovery.
+        """
+        endpoints = [
+            ("GET", f"{_MANYCHAT_API_BASE}/fb/subscriber/getList", {"flow_id": flow_id, "flow_ns": flow_id, "page_id": page_id}),
+            ("GET", f"{_MANYCHAT_API_BASE}/fb/sending/getLogs", {"flow_id": flow_id, "flow_ns": flow_id, "page_id": page_id}),
+            ("POST", f"{_MANYCHAT_API_BASE}/fb/sending/getLogs", {"flow_id": flow_id, "flow_ns": flow_id, "page_id": page_id}),
+            ("GET", f"{_MANYCHAT_API_BASE}/fb/broadcasting/getLogs", {"flow_id": flow_id, "flow_ns": flow_id, "page_id": page_id}),
+            ("POST", f"{_MANYCHAT_API_BASE}/fb/broadcasting/getLogs", {"flow_id": flow_id, "flow_ns": flow_id, "page_id": page_id}),
+            ("GET", f"{_MANYCHAT_API_BASE}/fb/sending/getFlowStats", {"flow_id": flow_id, "flow_ns": flow_id, "id": flow_id, "page_id": page_id}),
+            ("POST", f"{_MANYCHAT_API_BASE}/fb/sending/getFlowStats", {"flow_id": flow_id, "flow_ns": flow_id, "id": flow_id, "page_id": page_id}),
+        ]
+        out: dict[str, dict] = {}
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            for method, endpoint, payload_data in endpoints:
+                try:
+                    if method == "GET":
+                        resp_probe = await client.get(endpoint, headers=headers, params=payload_data)
+                    else:
+                        resp_probe = await client.post(endpoint, headers=headers, json=payload_data)
+                    parsed = _parse_json_or_text(resp_probe)
+                    out[f"{method} {endpoint}"] = {
+                        "status": resp_probe.status_code,
+                        "body": parsed,
+                    }
+                    logger.info(
+                        "ManyChat probe raw: channel=%s flow_id=%s method=%s endpoint=%s status=%s body=%s",
+                        channel_name,
+                        flow_id,
+                        method,
+                        endpoint,
+                        resp_probe.status_code,
+                        parsed,
+                    )
+                except Exception:
+                    logger.exception(
+                        "ManyChat probe failed: channel=%s flow_id=%s method=%s endpoint=%s",
+                        channel_name,
+                        flow_id,
+                        method,
+                        endpoint,
+                    )
+        return out
+
+    async def _compute_db_counts_for_flow(
+        flow_id: str, channel_name: str
+    ) -> tuple[dict[str, int], dict[str, list[str]]]:
+        """Real webhook counts from manychat_events for one flow/channel."""
+        sent_events_result = await db.execute(
+            select(
+                ManyChatEvent.manychat_subscriber_id,
+                func.count(ManyChatEvent.id).label("sent_count"),
+            )
+            .where(
+                ManyChatEvent.org_id == org_id,
+                ManyChatEvent.flow_id == flow_id,
+                ManyChatEvent.event_type == "sent",
+                ManyChatEvent.channel == channel_name,
+            )
+            .group_by(ManyChatEvent.manychat_subscriber_id)
+        )
+        sent_event_rows = sent_events_result.all()
+        sent_subscriber_ids = [
+            str(r.manychat_subscriber_id) for r in sent_event_rows if r.manychat_subscriber_id
+        ]
+        sent = int(sum(int(r.sent_count or 0) for r in sent_event_rows))
+
+        clicked_events_result = await db.execute(
+            select(
+                ManyChatEvent.manychat_subscriber_id,
+                func.count(ManyChatEvent.id).label("clicked_count"),
+            )
+            .where(
+                ManyChatEvent.org_id == org_id,
+                ManyChatEvent.flow_id == flow_id,
+                ManyChatEvent.event_type == "clicked",
+                ManyChatEvent.channel == channel_name,
+            )
+            .group_by(ManyChatEvent.manychat_subscriber_id)
+        )
+        clicked_event_rows = clicked_events_result.all()
+        clicked_subscriber_ids = [
+            str(r.manychat_subscriber_id) for r in clicked_event_rows if r.manychat_subscriber_id
+        ]
+        clicked = int(sum(int(r.clicked_count or 0) for r in clicked_event_rows))
+        counts = {
+            "sent": sent,
+            "clicked": clicked,
+        }
+        logger.info(
+            "ManyChat webhook counts: flow_id=%s channel=%s counts=%s",
+            flow_id,
+            channel_name,
+            counts,
+        )
+        return counts, {"sent": sent_subscriber_ids, "clicked": clicked_subscriber_ids}
+
+    async def _fetch_flow_stats(flow_id: str, channel_name: str) -> dict | None:
+        stats_url = f"{_MANYCHAT_API_BASE}/fb/sending/getFlowStats"
+        try:
+            async with httpx.AsyncClient(timeout=20.0) as client:
+                get_resp = await client.get(
+                    stats_url,
+                    headers=headers,
+                    params={"flow_id": flow_id, "flow_ns": flow_id, "id": flow_id, "page_id": page_id},
+                )
+                get_payload = _parse_json_or_text(get_resp)
+                logger.info(
+                    "ManyChat getFlowStats GET raw: channel=%s flow_id=%s status=%s body=%s",
+                    channel_name,
+                    flow_id,
+                    get_resp.status_code,
+                    get_payload if isinstance(get_payload, dict) else str(get_payload)[:2000],
+                )
+                post_resp = await client.post(
+                    stats_url,
+                    headers=headers,
+                    json={"flow_id": flow_id, "flow_ns": flow_id, "id": flow_id, "page_id": page_id},
+                )
+                post_payload = _parse_json_or_text(post_resp)
+                logger.info(
+                    "ManyChat getFlowStats POST raw: channel=%s flow_id=%s status=%s body=%s",
+                    channel_name,
+                    flow_id,
+                    post_resp.status_code,
+                    post_payload if isinstance(post_payload, dict) else str(post_payload)[:2000],
+                )
+        except Exception:
+            logger.exception("ManyChat getFlowStats request failed for channel=%s flow_id=%s", channel_name, flow_id)
+            return None
+
+        if get_resp.status_code < 400 and isinstance(get_payload, dict):
+            return get_payload
+        if post_resp.status_code < 400 and isinstance(post_payload, dict):
+            return post_payload
+        return None
+
+    for ch in requested_channels:
+        target_flow_id = preferred_flow_ids_by_channel.get(ch)
+        if not target_flow_id:
+            continue
+        flow_obj = next(
+            (
+                item
+                for item in raw_flows
+                if isinstance(item, dict)
+                and (
+                    item.get("id") == target_flow_id
+                    or item.get("flow_ns") == target_flow_id
+                    or item.get("ns") == target_flow_id
+                )
+            ),
+            None,
+        )
+        db_counts, db_subscriber_ids = await _compute_db_counts_for_flow(
+            target_flow_id, ch
+        )
+        sent = db_counts["sent"]
+        clicked = db_counts["clicked"]
+        metric_subscriber_ids["sent"].extend(db_subscriber_ids["sent"])
+        metric_subscriber_ids["clicked"].extend(db_subscriber_ids["clicked"])
+
+        flow_rows.append(
+            ManyChatFlowStat(
+                flow_id=target_flow_id,
+                flow_name=flow_obj.get("name") if isinstance(flow_obj, dict) else None,
+                channel=ch,
+                sent=sent,
+                clicked=clicked,
+            )
+        )
+
+    def _dedupe(values: list[str]) -> list[str]:
+        seen: set[str] = set()
+        out: list[str] = []
+        for v in values:
+            if v in seen:
+                continue
+            seen.add(v)
+            out.append(v)
+        return out
+
+    for key in metric_subscriber_ids:
+        metric_subscriber_ids[key] = _dedupe(metric_subscriber_ids[key])
+
+    all_ids = set()
+    for ids in metric_subscriber_ids.values():
+        all_ids.update(ids)
+
+    subscriber_name_by_id: dict[str, ManyChatMetricSubscriber] = {}
+    if all_ids:
+        sub_query = select(
+            Subscriber.manychat_subscriber_id,
+            Subscriber.first_name,
+            Subscriber.last_name,
+            Subscriber.channel,
+        ).where(
+            Subscriber.org_id == org_id,
+            Subscriber.manychat_subscriber_id.in_(all_ids),
+        )
+        if normalized_channel in {"instagram", "messenger"}:
+            sub_query = sub_query.where(Subscriber.channel == ChannelType(normalized_channel))
+        sub_result = await db.execute(sub_query)
+        for row in sub_result.all():
+            full_name = " ".join(
+                [p for p in [row.first_name, row.last_name] if p and str(p).strip()]
+            ).strip()
+            if not full_name:
+                full_name = f"Subscriber {row.manychat_subscriber_id}"
+            subscriber_name_by_id[row.manychat_subscriber_id] = ManyChatMetricSubscriber(
+                manychat_subscriber_id=row.manychat_subscriber_id,
+                name=full_name,
+                channel=row.channel.value if row.channel else None,
+            )
+
+    def _metric_card(metric_key: str, count: int) -> ManyChatMetricCard:
+        subscribers: list[ManyChatMetricSubscriber] = []
+        for sid in metric_subscriber_ids[metric_key]:
+            existing = subscriber_name_by_id.get(sid)
+            if existing:
+                subscribers.append(existing)
+            else:
+                subscribers.append(
+                    ManyChatMetricSubscriber(
+                        manychat_subscriber_id=sid,
+                        name=f"Subscriber {sid}",
+                        channel=normalized_channel if normalized_channel != "all" else None,
+                    )
+                )
+        return ManyChatMetricCard(
+            count=count,
+            source=metric_source_by_key[metric_key],
+            subscribers=subscribers,
+        )
+
+    total_sent = sum(r.sent for r in flow_rows)
+    total_clicked = sum(r.clicked for r in flow_rows)
+
+    message = None
+    if not raw_flows:
+        message = "ManyChat returned no flows for this API key/page."
+    elif total_sent == total_clicked == 0:
+        message = "No webhook events recorded yet for these workflows."
+    elif all(
+        r.flow_name is not None and r.sent >= 0 and r.clicked >= 0
+        for r in flow_rows
+    ):
+        message = "Metrics are based on webhook events (sent and clicked) captured by Attora."
+
+    return ManyChatFlowStatsResponse(
+        page_id=page_id,
+        channel=normalized_channel,
+        available=True,
+        message=message,
+        sent=_metric_card("sent", total_sent),
+        clicked=_metric_card("clicked", total_clicked),
+        flows=flow_rows,
     )
 
 

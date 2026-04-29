@@ -3,6 +3,7 @@ import { formatNumber } from '../../utils/formatters';
 
 interface FunnelChartProps {
   steps: FunnelStep[];
+  title?: string;
 }
 
 const stageColors: Record<string, string> = {
@@ -15,11 +16,11 @@ const stageColors: Record<string, string> = {
   purchase: 'bg-green-500',
 };
 
-export default function FunnelChart({ steps }: FunnelChartProps) {
+export default function FunnelChart({ steps, title = 'Conversion Funnel' }: FunnelChartProps) {
   if (!steps || steps.length === 0) {
     return (
       <div className="card">
-        <h3 className="text-sm font-semibold text-gray-900 mb-4">Conversion Funnel</h3>
+        <h3 className="text-sm font-semibold text-gray-900 mb-4">{title}</h3>
         <p className="text-sm text-gray-400">No funnel data available</p>
       </div>
     );
@@ -29,7 +30,7 @@ export default function FunnelChart({ steps }: FunnelChartProps) {
 
   return (
     <div className="card">
-      <h3 className="text-sm font-semibold text-gray-900 mb-6">Conversion Funnel</h3>
+      <h3 className="text-sm font-semibold text-gray-900 mb-6">{title}</h3>
       <div className="space-y-3">
         {steps.map((step, idx) => {
           const widthPercent = Math.max((step.volume / maxVolume) * 100, 4);
@@ -49,7 +50,7 @@ export default function FunnelChart({ steps }: FunnelChartProps) {
                 <div className="flex items-center gap-2">
                   {idx > 0 && step.drop_off_rate != null && (
                     <span className="text-xs text-red-500">
-                      -{step.drop_off_rate.toFixed(1)}% drop
+                      -{(step.drop_off_rate * 100).toFixed(1)}% drop
                     </span>
                   )}
                 </div>

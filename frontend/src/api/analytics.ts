@@ -1,11 +1,17 @@
 import client from './client';
-import type { AnalyticsResponse, ROIResponse, AIPerformanceResponse } from '../types';
+import type {
+  AnalyticsResponse,
+  ROIResponse,
+  AIPerformanceResponse,
+  ManyChatFlowStatsResponse,
+} from '../types';
 
 export interface AnalyticsFilters {
   date_from?: string;
   date_to?: string;
   channel?: string;
   campaign_id?: string;
+  organic?: boolean;
 }
 
 export async function getAnalytics(
@@ -16,6 +22,7 @@ export async function getAnalytics(
   if (filters.date_to) params.set('date_to', filters.date_to);
   if (filters.channel) params.set('channel', filters.channel);
   if (filters.campaign_id) params.set('campaign_id', filters.campaign_id);
+  if (filters.organic) params.set('organic', 'true');
 
   const response = await client.get<AnalyticsResponse>(
     `/analytics?${params.toString()}`
@@ -47,6 +54,15 @@ export async function getAIPerformance(filters: {
 
   const response = await client.get<AIPerformanceResponse>(
     `/analytics/ai-performance?${params.toString()}`
+  );
+  return response.data;
+}
+
+export async function getManyChatFlowStats(channel: 'all' | 'instagram' | 'messenger' = 'all'): Promise<ManyChatFlowStatsResponse> {
+  const params = new URLSearchParams();
+  params.set('channel', channel);
+  const response = await client.get<ManyChatFlowStatsResponse>(
+    `/analytics/manychat-flow-stats?${params.toString()}`
   );
   return response.data;
 }

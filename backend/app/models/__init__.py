@@ -18,6 +18,7 @@ from app.models.campaign_metrics import CampaignMetric, CampaignBreakdown
 from app.models.campaign import AdCampaign, CampaignUTM
 from app.models.knowledge_document import KnowledgeDocument
 from app.models.ai_usage_event import AIUsageEvent
+from app.models.manychat_event import ManyChatEvent
 
 __all__ = [
     "Base",
@@ -39,4 +40,5 @@ __all__ = [
     "CampaignUTM",
     "KnowledgeDocument",
     "AIUsageEvent",
+    "ManyChatEvent",
 ]

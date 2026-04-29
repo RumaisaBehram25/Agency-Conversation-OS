@@ -21,6 +21,10 @@ class ManyChatCustomFields(BaseModel):
     ad_id: str | None = None
     ad_set_id: str | None = None
     campaign_id: str | None = None
+    # Organic Instagram/Facebook attribution. ManyChat must set this from
+    # the comment/post trigger ({{trigger_post_id}} on IG, post id on FB)
+    # for organic conversations to register in the Organic Posts analytics.
+    post_id: str | None = None
     # Optional first-touch UTMs (map from ManyChat / landing flow)
     utm_source: str | None = None
     utm_medium: str | None = None
@@ -66,6 +70,22 @@ class ManyChatWebhookRequest(BaseModel):
     channel: str = Field(
         default="messenger",
         description="Messaging channel: whatsapp, messenger, instagram",
+    )
+    flow_id: str | None = Field(
+        default=None,
+        description="ManyChat flow namespace/id that triggered the webhook",
+    )
+    event_type: str | None = Field(
+        default=None,
+        description="Optional webhook event type (e.g. sent, clicked) when provided by flow setup",
+    )
+    clicked: bool | None = Field(
+        default=None,
+        description="Optional flag indicating this webhook was triggered by a button click",
+    )
+    button_clicked: bool | None = Field(
+        default=None,
+        description="Optional alias for clicked flag from flow payload",
     )
 
 

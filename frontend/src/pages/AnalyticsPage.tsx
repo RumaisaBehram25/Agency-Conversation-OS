@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
-import { getAnalytics, getROI, getAIPerformance, getExportUrl } from '../api/analytics';
+import { getAnalytics, getROI, getAIPerformance, getExportUrl, getManyChatFlowStats } from '../api/analytics';
 import { getConversations } from '../api/conversations';
 import { getCampaigns } from '../api/campaigns';
 import { syncMetaNow, getMetaSyncStatus } from '../api/settings';
@@ -16,7 +16,7 @@ import DateRangePicker from '../components/ui/DateRangePicker';
 import Select from '../components/ui/Select';
 import Button from '../components/ui/Button';
 import LoadingSpinner from '../components/ui/LoadingSpinner';
-import { daysAgoISO, todayISO, formatPercentRaw, formatDuration, formatCurrency } from '../utils/formatters';
+import { daysAgoISO, todayISO, formatPercentRaw, formatPercent, formatDuration, formatCurrency, formatNumber } from '../utils/formatters';
 import {
   LineChart,
   Line,
@@ -32,6 +32,7 @@ export default function AnalyticsPage() {
   const [dateFrom, setDateFrom] = useState(daysAgoISO(30));
   const [dateTo, setDateTo] = useState(todayISO());
   const [selectedCampaign, setSelectedCampaign] = useState<string>('');
+  const [manychatChannel, setManychatChannel] = useState<'all' | 'instagram' | 'messenger'>('all');
   const [syncing, setSyncing] = useState(false);
   const [syncStatus, setSyncStatus] = useState<string | null>(null);
   const [syncProgress, setSyncProgress] = useState(0);
@@ -63,6 +64,13 @@ export default function AnalyticsPage() {
         ...(selectedCampaign ? { campaign_id: selectedCampaign } : {}),
       }),
   });
+  const manychatStatsQuery = useQuery({
+    queryKey: ['manychat-flow-stats', manychatChannel],
+    queryFn: () => getManyChatFlowStats(manychatChannel),
+    staleTime: 0,
+    refetchOnMount: 'always',
+    placeholderData: (previousData) => previousData,
+  });
   const roiQuery = useQuery({
     queryKey: ['roi', dateRange, selectedCampaign],
     queryFn: () =>
@@ -81,6 +89,7 @@ export default function AnalyticsPage() {
   });
 
   const analytics = analyticsQuery.data ?? null;
+  const manychatStats = manychatStatsQuery.data ?? null;
   const roi = roiQuery.data ?? null;
   const aiPerf = aiPerfQuery.data ?? null;
   const conversationsTotal = conversationsQuery.data?.total ?? null;
@@ -96,6 +105,7 @@ export default function AnalyticsPage() {
   const load = useCallback(async () => {
     await Promise.all([
       queryClient.invalidateQueries({ queryKey: ['analytics', dateRange, selectedCampaign] }),
+      queryClient.invalidateQueries({ queryKey: ['manychat-flow-stats'] }),
       queryClient.invalidateQueries({ queryKey: ['roi', dateRange, selectedCampaign] }),
       queryClient.invalidateQueries({ queryKey: ['ai-performance', dateRange] }),
       queryClient.invalidateQueries({ queryKey: ['conversations-count', dateRange] }),
@@ -246,6 +256,11 @@ export default function AnalyticsPage() {
     fallback_rate: t.value,
   })) || [];
 
+  const manychatMetricConfig = [
+    { key: 'sent', label: 'Sent', color: 'text-gray-900' },
+    { key: 'clicked', label: 'Clicked', color: 'text-emerald-700' },
+  ] as const;
+
   return (
     <div>
       <div className="mb-6 flex flex-wrap items-center justify-between gap-4">
@@ -369,6 +384,121 @@ export default function AnalyticsPage() {
 
           {/* Funnel */}
           {analytics && <FunnelChart steps={analytics.funnel} />}
+
+          {/* ManyChat Workflow Stats */}
+          {manychatStats && (
+            <div className="space-y-4">
+              <div>
+                <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
+                  <div>
+                    <h3 className="text-sm font-semibold text-gray-900">Organic Posts Analytics</h3>
+                    {manychatStatsQuery.isFetching && (
+                      <p className="mt-1 text-xs text-gray-500">Updating channel data...</p>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-0 rounded-lg border border-gray-200 bg-gray-50 p-0.5">
+                    {(['all', 'instagram', 'messenger'] as const).map((ch) => {
+                      const label = ch === 'all' ? 'All' : ch === 'instagram' ? 'Instagram' : 'Facebook';
+                      const active = manychatChannel === ch;
+                      return (
+                        <button
+                          key={ch}
+                          onClick={() => setManychatChannel(ch)}
+                          className={`rounded-md px-3 py-1 text-xs font-medium transition-all duration-150 ${
+                            active
+                              ? 'bg-white text-gray-900 shadow-sm'
+                              : 'text-gray-500 hover:text-gray-700'
+                          }`}
+                        >
+                          {label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-2">
+                  {manychatMetricConfig.map((metric) => {
+                    const metricData = manychatStats[metric.key];
+                    return (
+                      <div
+                        key={metric.key}
+                        className="card text-center"
+                      >
+                        <p className="text-xs text-gray-500 uppercase tracking-wider">{metric.label}</p>
+                        <p className={`mt-1 text-2xl font-bold ${metric.color}`}>
+                          {formatNumber(metricData.count)}
+                        </p>
+                        <p className="mt-1 text-[11px] text-gray-500">
+                          {metricData.source === 'estimated'
+                            ? 'Estimated'
+                            : metricData.source === 'attora_events'
+                              ? 'Webhook events'
+                              : 'ManyChat API'}
+                        </p>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+              <div className="card">
+                <h3 className="mb-4 text-sm font-semibold text-gray-900">Sent vs Clicked Comparison</h3>
+                <div className="space-y-4">
+                  {(() => {
+                    const flowsForComparison =
+                      manychatChannel === 'all'
+                        ? [
+                            {
+                              flow_id: 'all',
+                              flow_name: 'All Workflows',
+                              channel: 'all',
+                              sent: manychatStats.flows.reduce((sum, f) => sum + (f.sent || 0), 0),
+                              clicked: manychatStats.flows.reduce((sum, f) => sum + (f.clicked || 0), 0),
+                            },
+                          ]
+                        : manychatStats.flows;
+                    const maxSent = Math.max(1, ...flowsForComparison.map((f) => f.sent || 0));
+                    const maxClicked = Math.max(1, ...flowsForComparison.map((f) => f.clicked || 0));
+                    return flowsForComparison.map((flow) => {
+                      const sentPct = Math.max(4, (flow.sent / maxSent) * 100);
+                      const clickedPct = Math.max(4, (flow.clicked / maxClicked) * 100);
+                      return (
+                        <div key={`${flow.channel}:${flow.flow_id}`} className="rounded-lg border border-gray-100 p-3">
+                          <div className="mb-2 text-xs text-gray-700">
+                            <div className="font-medium">{flow.flow_name ?? 'Unnamed flow'}</div>
+                            {flow.channel !== 'all' && (
+                              <div className="capitalize text-gray-500">
+                                {flow.channel === 'messenger' ? 'Facebook' : flow.channel}
+                              </div>
+                            )}
+                          </div>
+                          <div className="space-y-2">
+                            <div>
+                              <div className="mb-1 flex items-center justify-between text-xs">
+                                <span className="text-gray-600">Sent</span>
+                                <span className="font-semibold text-gray-900">{formatNumber(flow.sent)}</span>
+                              </div>
+                              <div className="h-2 w-full rounded-full bg-gray-100">
+                                <div className="h-2 rounded-full bg-gray-500" style={{ width: `${sentPct}%` }} />
+                              </div>
+                            </div>
+                            <div>
+                              <div className="mb-1 flex items-center justify-between text-xs">
+                                <span className="text-gray-600">Clicked</span>
+                                <span className="font-semibold text-emerald-700">{formatNumber(flow.clicked)}</span>
+                              </div>
+                              <div className="h-2 w-full rounded-full bg-gray-100">
+                                <div className="h-2 rounded-full bg-emerald-500" style={{ width: `${clickedPct}%` }} />
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    });
+                  })()}
+                </div>
+              </div>
+            </div>
+          )}
 
           {/* Trend Charts */}
           {analytics && (

@@ -1040,75 +1040,56 @@ async def get_manychat_flow_stats(
 
     encrypted_key = org_row.manychat_api_key
     configured_page_id = org_row.manychat_page_id
-    if not encrypted_key:
-        return ManyChatFlowStatsResponse(
-            page_id=configured_page_id,
-            channel=normalized_channel,
-            available=False,
-            message="ManyChat API key is not configured in Settings.",
-        )
-
-    try:
-        manychat_api_key = decrypt_value(encrypted_key)
-    except Exception:
-        return ManyChatFlowStatsResponse(
-            page_id=configured_page_id,
-            channel=normalized_channel,
-            available=False,
-            message="ManyChat API key could not be decrypted.",
-        )
-
     page_id = configured_page_id or _MANYCHAT_TARGET_PAGE_ID
-    headers = {
-        "Authorization": f"Bearer {manychat_api_key}",
-        "Accept": "application/json",
-    }
-    url = f"{_MANYCHAT_API_BASE}/fb/page/getFlows"
 
-    try:
-        async with httpx.AsyncClient(timeout=20.0) as client:
-            resp = await client.get(url, headers=headers)
-        payload = resp.json() if resp.content else {}
-    except Exception:
-        return ManyChatFlowStatsResponse(
-            page_id=page_id,
-            channel=normalized_channel,
-            available=False,
-            message="ManyChat API request failed while fetching flows.",
-        )
+    # Attempt to decrypt the ManyChat API key for optional flow-name enrichment.
+    # A missing or broken key must NOT block DB-derived webhook counts — those
+    # come entirely from manychat_events and need no external API call.
+    manychat_api_key: str | None = None
+    api_warning: str | None = None
+    if not encrypted_key:
+        api_warning = "ManyChat API key is not configured in Settings."
+    else:
+        try:
+            manychat_api_key = decrypt_value(encrypted_key)
+        except Exception:
+            api_warning = "ManyChat API key could not be decrypted."
+    if api_warning:
+        logger.warning("get_manychat_flow_stats: %s — continuing with DB-only counts.", api_warning)
 
-    logger.info(
-        "ManyChat getFlows raw response: status=%s body=%s",
-        resp.status_code,
-        payload if isinstance(payload, dict) else str(payload)[:2000],
-    )
+    # Try to fetch flow list from ManyChat API for flow name enrichment only.
+    raw_flows: list = []
+    if manychat_api_key:
+        headers = {
+            "Authorization": f"Bearer {manychat_api_key}",
+            "Accept": "application/json",
+        }
+        url = f"{_MANYCHAT_API_BASE}/fb/page/getFlows"
+        try:
+            async with httpx.AsyncClient(timeout=20.0) as client:
+                resp = await client.get(url, headers=headers)
+            payload = resp.json() if resp.content else {}
+            logger.info(
+                "ManyChat getFlows raw response: status=%s body=%s",
+                resp.status_code,
+                payload if isinstance(payload, dict) else str(payload)[:2000],
+            )
+            if resp.status_code < 400 and isinstance(payload, dict):
+                maybe_data = payload.get("data")
+                if isinstance(maybe_data, list):
+                    raw_flows = maybe_data
+                elif isinstance(maybe_data, dict) and isinstance(maybe_data.get("flows"), list):
+                    raw_flows = maybe_data["flows"]
+                elif isinstance(payload.get("flows"), list):
+                    raw_flows = payload["flows"]
+        except Exception:
+            logger.warning("ManyChat getFlows request failed — flow names will be absent.")
 
-    if resp.status_code >= 400:
-        message = payload.get("message") if isinstance(payload, dict) else None
-        return ManyChatFlowStatsResponse(
-            page_id=page_id,
-            channel=normalized_channel,
-            available=False,
-            message=message or f"ManyChat API returned HTTP {resp.status_code}.",
-        )
-
-    raw_flows = []
-    if isinstance(payload, dict):
-        maybe_data = payload.get("data")
-        if isinstance(maybe_data, list):
-            raw_flows = maybe_data
-        elif isinstance(maybe_data, dict) and isinstance(maybe_data.get("flows"), list):
-            raw_flows = maybe_data["flows"]
-        elif isinstance(payload.get("flows"), list):
-            raw_flows = payload["flows"]
-
-    flow_ids = []
-    for item in raw_flows:
-        if not isinstance(item, dict):
-            continue
-        flow_ids.append(
-            str(item.get("id") or item.get("flow_ns") or item.get("ns") or "")
-        )
+    flow_ids = [
+        str(item.get("id") or item.get("flow_ns") or item.get("ns") or "")
+        for item in raw_flows
+        if isinstance(item, dict)
+    ]
     logger.info("ManyChat getFlows discovered flow IDs: %s", [f for f in flow_ids if f])
 
     flow_rows: list[ManyChatFlowStat] = []

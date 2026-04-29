@@ -233,9 +233,14 @@ async def manychat_webhook(
     # to add new rows in both cases.
     if flow_id:
         try:
+            # Normalise channel: ManyChat sends "facebook" for Messenger flows;
+            # map it to "messenger" so it matches preferred_flow_ids_by_channel.
+            raw_ch = (channel or "messenger").lower()
+            norm_ch = "messenger" if raw_ch == "facebook" else raw_ch
+
             logger.info(
-                "Persisting manychat event: org=%s subscriber=%s flow_id=%s click=%s",
-                org_id, subscriber_id, flow_id, is_click_event,
+                "Persisting manychat event: org=%s subscriber=%s flow_id=%s channel=%s click=%s",
+                org_id, subscriber_id, flow_id, norm_ch, is_click_event,
             )
             db.add(
                 ManyChatEvent(
@@ -243,7 +248,7 @@ async def manychat_webhook(
                     manychat_subscriber_id=subscriber_id,
                     flow_id=flow_id,
                     event_type="sent",
-                    channel=(channel or "messenger").lower(),
+                    channel=norm_ch,
                 )
             )
             if is_click_event:
@@ -253,7 +258,7 @@ async def manychat_webhook(
                         manychat_subscriber_id=subscriber_id,
                         flow_id=flow_id,
                         event_type="clicked",
-                        channel=(channel or "messenger").lower(),
+                        channel=norm_ch,
                     )
                 )
             await db.flush()

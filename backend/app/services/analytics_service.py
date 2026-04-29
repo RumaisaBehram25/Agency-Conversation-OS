@@ -1177,6 +1177,10 @@ async def get_manychat_flow_stats(
         flow_id: str, channel_name: str
     ) -> tuple[dict[str, int], dict[str, list[str]]]:
         """Real webhook counts from manychat_events for one flow/channel."""
+        # Filter by flow_id only — not channel. The flow_id already uniquely
+        # identifies the channel (preferred_flow_ids_by_channel), and filtering
+        # on channel would silently drop rows saved as "facebook" instead of
+        # "messenger" (ManyChat uses both names for the same channel type).
         sent_events_result = await db.execute(
             select(
                 ManyChatEvent.manychat_subscriber_id,
@@ -1186,7 +1190,6 @@ async def get_manychat_flow_stats(
                 ManyChatEvent.org_id == org_id,
                 ManyChatEvent.flow_id == flow_id,
                 ManyChatEvent.event_type == "sent",
-                ManyChatEvent.channel == channel_name,
             )
             .group_by(ManyChatEvent.manychat_subscriber_id)
         )
@@ -1205,7 +1208,6 @@ async def get_manychat_flow_stats(
                 ManyChatEvent.org_id == org_id,
                 ManyChatEvent.flow_id == flow_id,
                 ManyChatEvent.event_type == "clicked",
-                ManyChatEvent.channel == channel_name,
             )
             .group_by(ManyChatEvent.manychat_subscriber_id)
         )

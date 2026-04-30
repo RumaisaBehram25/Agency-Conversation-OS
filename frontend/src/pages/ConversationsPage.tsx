@@ -10,6 +10,16 @@ import Pagination from '../components/ui/Pagination';
 import LoadingSpinner from '../components/ui/LoadingSpinner';
 import { daysAgoISO, todayISO } from '../utils/formatters';
 
+const LS_KEY = 'attora_source_filter';
+
+function readSourceFromStorage(): boolean {
+  try {
+    return localStorage.getItem(LS_KEY) === 'true';
+  } catch {
+    return false;
+  }
+}
+
 const statusOptions = [
   { value: '', label: 'All Statuses' },
   { value: 'active', label: 'Active' },
@@ -24,6 +34,17 @@ const channelOptions = [
   { value: 'instagram', label: 'Instagram' },
 ];
 
+function resolveSourceType(urlParam: string | null): 'paid' | 'organic' | undefined {
+  if (urlParam === 'paid' || urlParam === 'organic') return urlParam;
+  return undefined;
+}
+
+function resolveIsTest(urlParam: string | null): boolean {
+  if (urlParam === 'true') return true;
+  if (urlParam === 'false') return false;
+  return readSourceFromStorage();
+}
+
 export default function ConversationsPage() {
   const queryClient = useQueryClient();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -32,6 +53,9 @@ export default function ConversationsPage() {
     channel: searchParams.get('channel') || '',
     date_from: searchParams.get('date_from') || daysAgoISO(30),
     date_to: searchParams.get('date_to') || todayISO(),
+    is_test: resolveIsTest(searchParams.get('is_test')),
+    source_type: resolveSourceType(searchParams.get('source_type')),
+    keywords: searchParams.get('keywords') || undefined,
     page: Number(searchParams.get('page') || 1),
     page_size: Number(searchParams.get('page_size') || 20),
   });
@@ -48,15 +72,24 @@ export default function ConversationsPage() {
     if (filters.channel) params.set('channel', filters.channel);
     if (filters.date_from) params.set('date_from', filters.date_from);
     if (filters.date_to) params.set('date_to', filters.date_to);
+    params.set('is_test', String(filters.is_test));
+    if (filters.source_type) params.set('source_type', filters.source_type);
+    if (filters.keywords) params.set('keywords', filters.keywords);
     if (filters.page) params.set('page', String(filters.page));
     if (filters.page_size) params.set('page_size', String(filters.page_size));
     setSearchParams(params, { replace: true });
+
+    try {
+      localStorage.setItem(LS_KEY, String(filters.is_test));
+    } catch {
+      // ignore storage errors
+    }
   }, [filters, setSearchParams]);
 
   const conversations = data?.items ?? [];
   const total = data?.total ?? 0;
 
-  function updateFilter(key: keyof ConversationFilters, value: string | number) {
+  function updateFilter(key: keyof ConversationFilters, value: string | number | boolean) {
     setFilters((prev) => ({
       ...prev,
       [key]: value,
@@ -91,6 +124,35 @@ export default function ConversationsPage() {
 
       {/* Filters */}
       <div className="mb-6 flex flex-wrap items-end gap-4">
+        {/* Source toggle — first in bar, matches input height */}
+        <div>
+          <label className="block text-sm font-medium text-gray-700 mb-1">Source</label>
+          <div className="flex rounded-lg border border-gray-200 bg-gray-100 p-1">
+            <button
+              type="button"
+              onClick={() => updateFilter('is_test', false)}
+              className={`rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${
+                !filters.is_test
+                  ? 'bg-white text-gray-900 shadow-sm'
+                  : 'text-gray-500 hover:text-gray-700'
+              }`}
+            >
+              Real Clients
+            </button>
+            <button
+              type="button"
+              onClick={() => updateFilter('is_test', true)}
+              className={`rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${
+                filters.is_test
+                  ? 'bg-white text-gray-900 shadow-sm'
+                  : 'text-gray-500 hover:text-gray-700'
+              }`}
+            >
+              Playground
+            </button>
+          </div>
+        </div>
+
         <Select
           label="Status"
           options={statusOptions}

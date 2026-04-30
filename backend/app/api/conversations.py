@@ -17,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.database import get_db
+from app.models.campaign import AdCampaign
 from app.models.conversation import Conversation
 from app.models.message import Message
 from app.models.subscriber import Subscriber
@@ -54,41 +55,29 @@ def _parse_query_date(v: object) -> date | None:
     raise ValueError(f"unrecognized date format: {s!r}; use YYYY-MM-DD or M/D/YYYY")
 
 
-@router.get("", response_model=PaginatedResponse[ConversationListItem])
-async def list_conversations(
-    current_user: User = Depends(get_current_user),
-    org_id: uuid.UUID = Depends(get_org_id),
-    db: AsyncSession = Depends(get_db),
-    status_filter: str | None = Query(None, alias="status"),
-    channel: str | None = Query(None),
-    date_from: Annotated[
-        date | None,
-        BeforeValidator(_parse_query_date),
-        Query(description="Inclusive start (UTC). ISO: YYYY-MM-DD, or M/D/YYYY."),
-    ] = None,
-    date_to: Annotated[
-        date | None,
-        BeforeValidator(_parse_query_date),
-        Query(description="Inclusive end (UTC). ISO: YYYY-MM-DD, or M/D/YYYY."),
-    ] = None,
-    page: int = Query(1, ge=1),
-    page_size: int = Query(20, ge=1, le=100),
-) -> PaginatedResponse[ConversationListItem]:
-    """
-    List conversations with filtering and pagination.
+def _parse_keywords(keywords: str | None) -> list[str]:
+    if not keywords:
+        return []
+    return [part.strip() for part in keywords.split(",") if part.strip()]
 
-    Includes subscriber name, last message preview, buyer stage, and message count.
-    """
-    # Base query
+
+def _apply_conversation_filters(
+    query,
+    *,
+    org_id: uuid.UUID,
+    status_filter: str | None,
+    channel: str | None,
+    date_from: date | None,
+    date_to: date | None,
+    is_test: bool | None,
+    source_type: str | None,
+    keywords: list[str],
+):
     activity_ts = func.coalesce(Conversation.last_activity_at, Conversation.created_at)
+    needs_subscriber_join = is_test is not None or (keywords and source_type == "organic")
 
-    query = (
-        select(Conversation)
-        .where(Conversation.org_id == org_id)
-        .options(selectinload(Conversation.subscriber))
-    )
+    query = query.where(Conversation.org_id == org_id)
 
-    # Apply filters
     if status_filter:
         try:
             conv_status = ConversationStatus(status_filter)
@@ -119,25 +108,84 @@ async def list_conversations(
             activity_ts <= datetime(date_to.year, date_to.month, date_to.day, 23, 59, 59, tzinfo=timezone.utc)
         )
 
+    if needs_subscriber_join:
+        query = query.join(Subscriber, Conversation.subscriber_id == Subscriber.id)
+
+    if is_test is not None:
+        if is_test:
+            query = query.where(Subscriber.manychat_subscriber_id.like("attora_test%"))
+        else:
+            query = query.where(~Subscriber.manychat_subscriber_id.like("attora_test%"))
+
+    if keywords and source_type == "organic":
+        query = query.join(AdCampaign, Subscriber.attora_campaign_id == AdCampaign.id)
+        query = query.where(AdCampaign.source_type == "organic", AdCampaign.keyword.in_(keywords))
+
+    return query
+
+
+@router.get("", response_model=PaginatedResponse[ConversationListItem])
+async def list_conversations(
+    current_user: User = Depends(get_current_user),
+    org_id: uuid.UUID = Depends(get_org_id),
+    db: AsyncSession = Depends(get_db),
+    status_filter: str | None = Query(None, alias="status"),
+    channel: str | None = Query(None),
+    date_from: Annotated[
+        date | None,
+        BeforeValidator(_parse_query_date),
+        Query(description="Inclusive start (UTC). ISO: YYYY-MM-DD, or M/D/YYYY."),
+    ] = None,
+    date_to: Annotated[
+        date | None,
+        BeforeValidator(_parse_query_date),
+        Query(description="Inclusive end (UTC). ISO: YYYY-MM-DD, or M/D/YYYY."),
+    ] = None,
+    is_test: bool | None = Query(None, description="True=playground (attora_test* subscribers), False=real clients only, None=all"),
+    source_type: str | None = Query(None, pattern="^(paid|organic)$"),
+    keywords: str | None = Query(None, description="Comma-separated campaign keywords to filter organic conversations."),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+) -> PaginatedResponse[ConversationListItem]:
+    """
+    List conversations with filtering and pagination.
+
+    Includes subscriber name, last message preview, buyer stage, and message count.
+    """
+    parsed_keywords = _parse_keywords(keywords)
+
+    query = (
+        select(Conversation)
+        .options(selectinload(Conversation.subscriber))
+    )
+    query = _apply_conversation_filters(
+        query,
+        org_id=org_id,
+        status_filter=status_filter,
+        channel=channel,
+        date_from=date_from,
+        date_to=date_to,
+        is_test=is_test,
+        source_type=source_type,
+        keywords=parsed_keywords,
+    )
+
     # Count total
     count_query = (
         select(func.count())
         .select_from(Conversation)
-        .where(Conversation.org_id == org_id)
     )
-    # Re-apply filters to count query
-    if status_filter:
-        count_query = count_query.where(Conversation.status == ConversationStatus(status_filter))
-    if channel:
-        count_query = count_query.where(Conversation.channel == ChannelType(channel))
-    if date_from:
-        count_query = count_query.where(
-            activity_ts >= datetime(date_from.year, date_from.month, date_from.day, tzinfo=timezone.utc)
-        )
-    if date_to:
-        count_query = count_query.where(
-            activity_ts <= datetime(date_to.year, date_to.month, date_to.day, 23, 59, 59, tzinfo=timezone.utc)
-        )
+    count_query = _apply_conversation_filters(
+        count_query,
+        org_id=org_id,
+        status_filter=status_filter,
+        channel=channel,
+        date_from=date_from,
+        date_to=date_to,
+        is_test=is_test,
+        source_type=source_type,
+        keywords=parsed_keywords,
+    )
 
     total_result = await db.execute(count_query)
     total = total_result.scalar() or 0

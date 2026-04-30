@@ -6,6 +6,9 @@ export interface ConversationFilters {
   channel?: string;
   date_from?: string;
   date_to?: string;
+  is_test?: boolean;
+  source_type?: 'paid' | 'organic';
+  keywords?: string;
   page?: number;
   page_size?: number;
 }
@@ -18,6 +21,9 @@ export async function getConversations(
   if (filters.channel) params.set('channel', filters.channel);
   if (filters.date_from) params.set('date_from', filters.date_from);
   if (filters.date_to) params.set('date_to', filters.date_to);
+  if (filters.is_test !== undefined) params.set('is_test', String(filters.is_test));
+  if (filters.source_type) params.set('source_type', filters.source_type);
+  if (filters.keywords) params.set('keywords', filters.keywords);
   if (filters.page) params.set('page', String(filters.page));
   if (filters.page_size) params.set('page_size', String(filters.page_size));
 

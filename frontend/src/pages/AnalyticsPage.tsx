@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
-import { getAnalytics, getROI, getAIPerformance, getExportUrl } from '../api/analytics';
+import { getAnalytics, getROI, getAIPerformance, getExportUrl, getOrganicKeywordStats } from '../api/analytics';
 import { getConversations } from '../api/conversations';
 import { getCampaigns, listAdCampaigns } from '../api/campaigns';
 import { syncMetaNow, getMetaSyncStatus } from '../api/settings';
@@ -68,6 +68,19 @@ export default function AnalyticsPage() {
     queryFn: () => listAdCampaigns({ source_type: 'organic', is_active: true }),
   });
 
+  const selectedOrganicCampaign =
+    organicCampaigns.find((campaign) => campaign.id === selectedCampaign) ?? null;
+
+  const organicStatsKeyword =
+    sourceFilter === 'organic' && selectedCampaign && selectedCampaignSource === 'organic'
+      ? selectedOrganicCampaign?.keyword?.trim() || undefined
+      : undefined;
+
+  const organicConversationKeywords =
+    sourceFilter === 'organic'
+      ? organicStatsKeyword ?? organicCampaigns.map((campaign) => campaign.keyword?.trim()).filter((keyword): keyword is string => !!keyword).join(',')
+      : null;
+
   // Build the campaign-scope query params:
   //   • specific paid campaign  → campaign_id (meta_campaign_id string)
   //   • specific organic campaign → attora_campaign_id (UUID)
@@ -122,10 +135,44 @@ export default function AnalyticsPage() {
     queryFn: () => getConversations({ ...dateRange, page: 1, page_size: 1 }),
   });
 
+  const organicKeywordQuery = useQuery({
+    queryKey: ['organic-keyword-stats', dateRange, organicStatsKeyword],
+    queryFn: () => getOrganicKeywordStats({ ...dateRange, keyword: organicStatsKeyword }),
+    enabled:
+      sourceFilter === 'organic' &&
+      (!selectedCampaign || selectedCampaignSource !== 'organic' || selectedOrganicCampaign != null),
+  });
+
   const analytics = analyticsQuery.data ?? null;
   const roi = roiQuery.data ?? null;
   const aiPerf = aiPerfQuery.data ?? null;
   const conversationsTotal = conversationsQuery.data?.total ?? null;
+  const organicStats = sourceFilter === 'organic' ? organicKeywordQuery.data : null;
+  const organicFunnelSteps = organicStats
+    ? [
+        {
+          name: 'conversations',
+          volume: organicStats.funnel_conversations,
+          drop_off_rate: null,
+        },
+        {
+          name: 'qualified',
+          volume: organicStats.funnel_qualified,
+          drop_off_rate:
+            organicStats.funnel_conversations > 0
+              ? 1 - organicStats.funnel_qualified / organicStats.funnel_conversations
+              : null,
+        },
+        {
+          name: 'converted',
+          volume: organicStats.funnel_converted,
+          drop_off_rate:
+            organicStats.funnel_qualified > 0
+              ? 1 - organicStats.funnel_converted / organicStats.funnel_qualified
+              : null,
+        },
+      ]
+    : null;
   const loading =
     analyticsQuery.isLoading || roiQuery.isLoading || aiPerfQuery.isLoading || conversationsQuery.isLoading;
   const isFirstLoad =
@@ -147,6 +194,7 @@ export default function AnalyticsPage() {
       queryClient.invalidateQueries({ queryKey: ['conversations-count', dateRange] }),
       queryClient.invalidateQueries({ queryKey: ['campaigns-for-analytics', dateRange] }),
       queryClient.invalidateQueries({ queryKey: ['ad-campaigns-organic'] }),
+      queryClient.invalidateQueries({ queryKey: ['organic-keyword-stats', dateRange] }),
     ]);
   }, [queryClient, dateRange, selectedCampaign, selectedCampaignSource, sourceFilter]);
 
@@ -292,6 +340,18 @@ export default function AnalyticsPage() {
     date: new Date(t.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
     fallback_rate: t.value,
   })) || [];
+
+  const conversationsLinkTo = (() => {
+    const params = new URLSearchParams({
+      date_from: dateFrom,
+      date_to: dateTo,
+    });
+    if (sourceFilter === 'organic') {
+      params.set('source_type', 'organic');
+      params.set('keywords', organicConversationKeywords ?? 'MACROS,MUSCLES');
+    }
+    return `/conversations?${params.toString()}`;
+  })();
 
   return (
     <div>
@@ -471,33 +531,44 @@ export default function AnalyticsPage() {
           )}
 
           {/* Summary Stats */}
-          {analytics && (
-            <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-              <div className="card text-center">
-                <p className="text-xs text-gray-500 uppercase tracking-wider">Total Conversations</p>
-                <p className="mt-1 text-2xl font-bold text-gray-900">
-                  {conversationsTotal ?? analytics.total_conversations}
-                </p>
-                <Link
-                  to={`/conversations?date_from=${encodeURIComponent(dateFrom)}&date_to=${encodeURIComponent(dateTo)}`}
-                  className="mt-2 inline-block text-xs font-medium text-primary-700 hover:text-primary-800"
-                >
-                  View conversations
-                </Link>
+          {analytics && (() => {
+            const statConversations = organicStats != null
+              ? organicStats.total_conversations
+              : (conversationsTotal ?? analytics.total_conversations);
+            const statConversions = organicStats != null
+              ? organicStats.total_conversions
+              : analytics.total_conversions;
+            const statRevenue = organicStats != null
+              ? organicStats.total_revenue
+              : analytics.total_revenue;
+            return (
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+                <div className="card text-center">
+                  <p className="text-xs text-gray-500 uppercase tracking-wider">Total Conversations</p>
+                  <p className="mt-1 text-2xl font-bold text-gray-900">
+                    {statConversations}
+                  </p>
+                  <Link
+                    to={conversationsLinkTo}
+                    className="mt-2 inline-block text-xs font-medium text-primary-700 hover:text-primary-800"
+                  >
+                    View conversations
+                  </Link>
+                </div>
+                <div className="card text-center">
+                  <p className="text-xs text-gray-500 uppercase tracking-wider">Total Conversions</p>
+                  <p className="mt-1 text-2xl font-bold text-green-700">{statConversions}</p>
+                </div>
+                <div className="card text-center">
+                  <p className="text-xs text-gray-500 uppercase tracking-wider">Total Revenue</p>
+                  <p className="mt-1 text-2xl font-bold text-green-700">{formatCurrency(statRevenue)}</p>
+                </div>
               </div>
-              <div className="card text-center">
-                <p className="text-xs text-gray-500 uppercase tracking-wider">Total Conversions</p>
-                <p className="mt-1 text-2xl font-bold text-green-700">{analytics.total_conversions}</p>
-              </div>
-              <div className="card text-center">
-                <p className="text-xs text-gray-500 uppercase tracking-wider">Total Revenue</p>
-                <p className="mt-1 text-2xl font-bold text-green-700">{formatCurrency(analytics.total_revenue)}</p>
-              </div>
-            </div>
-          )}
+            );
+          })()}
 
           {/* Funnel */}
-          {analytics && <FunnelChart steps={analytics.funnel} />}
+          {analytics && <FunnelChart steps={organicFunnelSteps ?? analytics.funnel} />}
 
           {/* Trend Charts */}
           {analytics && (

@@ -1,10 +1,11 @@
 """
 Attora — Analytics API Routes
 
-GET  /api/analytics                — Aggregated metrics for date range
-GET  /api/analytics/roi            — Cost and revenue metrics
-GET  /api/analytics/ai-performance — AI metrics
-GET  /api/analytics/export         — CSV download
+GET  /api/analytics                       — Aggregated metrics for date range
+GET  /api/analytics/roi                   — Cost and revenue metrics
+GET  /api/analytics/ai-performance        — AI metrics
+GET  /api/analytics/organic-keyword-stats — Keyword-filtered organic counts
+GET  /api/analytics/export                — CSV download
 """
 
 import csv
@@ -21,12 +22,14 @@ from app.models.user import User
 from app.schemas.analytics import (
     AIPerformanceResponse,
     AnalyticsResponse,
+    OrganicKeywordStatsResponse,
     ROIResponse,
 )
 from app.services.analytics_service import (
     get_ai_performance,
     get_analytics,
     get_analytics_export_data,
+    get_organic_keyword_stats,
     get_roi,
 )
 from app.api.deps import get_current_user, get_org_id
@@ -124,6 +127,23 @@ async def analytics_ai_performance(
     total tokens, and total AI cost.
     """
     return await get_ai_performance(db, org_id, date_from, date_to)
+
+
+@router.get("/organic-keyword-stats", response_model=OrganicKeywordStatsResponse)
+async def analytics_organic_keyword_stats(
+    current_user: User = Depends(get_current_user),
+    org_id: uuid.UUID = Depends(get_org_id),
+    db: AsyncSession = Depends(get_db),
+    date_from: date = Query(default_factory=lambda: date.today() - timedelta(days=30)),
+    date_to: date = Query(default_factory=date.today),
+    keyword: str | None = Query(None),
+) -> OrganicKeywordStatsResponse:
+    """
+    Conversation, conversion, and revenue counts for organic campaigns
+    with keyword 'MACROS' or 'MUSCLES' (case-insensitive).
+    """
+    stats = await get_organic_keyword_stats(db, org_id, date_from, date_to, keyword)
+    return OrganicKeywordStatsResponse(**stats)
 
 
 @router.get("/export")

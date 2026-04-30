@@ -5,6 +5,7 @@ Computes CPQC, CCR, funnel data, trends, ROI, AI performance,
 and campaign health from DailyAnalytics + raw tables.
 """
 
+import logging
 import uuid
 from datetime import date, datetime, timedelta, timezone
 
@@ -27,6 +28,9 @@ from app.schemas.analytics import (
     ROIResponse,
 )
 from app.schemas.dashboard import CampaignHealth
+
+
+logger = logging.getLogger(__name__)
 
 
 def _campaigns_of_source_type_subquery(org_id: uuid.UUID, source_type: str):
@@ -868,6 +872,94 @@ async def _count_conversations_for_campaign(
         .where(*where_clauses)
     )
     return int(result.scalar() or 0)
+
+
+async def get_organic_keyword_stats(
+    db: AsyncSession,
+    org_id: uuid.UUID,
+    date_from: date,
+    date_to: date,
+    keyword: str | None = None,
+) -> dict:
+    """Return organic keyword-specific conversation, conversion, revenue, and funnel counts."""
+    keywords = [keyword] if keyword else ["MACROS", "MUSCLE"]
+
+    campaign_ids_result = await db.execute(
+        select(AdCampaign.id).where(
+            AdCampaign.org_id == org_id,
+            func.lower(AdCampaign.source_type) == "organic",
+            func.upper(AdCampaign.keyword).in_(keywords),
+        )
+    )
+    campaign_ids = [row[0] for row in campaign_ids_result.all()]
+
+    if not campaign_ids:
+        return {
+            "total_conversations": 0,
+            "total_conversions": 0,
+            "total_revenue": 0.0,
+            "funnel_conversations": 0,
+            "funnel_qualified": 0,
+            "funnel_converted": 0,
+        }
+
+    dt_from = datetime(date_from.year, date_from.month, date_from.day, tzinfo=timezone.utc)
+    dt_to = datetime(date_to.year, date_to.month, date_to.day, 23, 59, 59, tzinfo=timezone.utc)
+
+    activity_ts = func.coalesce(Conversation.last_activity_at, Conversation.created_at)
+    conv_count_result = await db.execute(
+        select(func.count())
+        .select_from(Conversation)
+        .join(Subscriber, Subscriber.id == Conversation.subscriber_id)
+        .where(
+            Conversation.org_id == org_id,
+            activity_ts >= dt_from,
+            activity_ts <= dt_to,
+            Subscriber.attora_campaign_id.in_(campaign_ids),
+        )
+    )
+    total_conversations = int(conv_count_result.scalar() or 0)
+
+    qualified_result = await db.execute(
+        select(func.count())
+        .select_from(Conversation)
+        .join(Subscriber, Subscriber.id == Conversation.subscriber_id)
+        .where(
+            Conversation.org_id == org_id,
+            activity_ts >= dt_from,
+            activity_ts <= dt_to,
+            Subscriber.attora_campaign_id.in_(campaign_ids),
+            Subscriber.buyer_stage.in_([
+                BuyerStage.INTENT,
+                BuyerStage.PURCHASE,
+                BuyerStage.POST_PURCHASE,
+            ]),
+        )
+    )
+    funnel_qualified = int(qualified_result.scalar() or 0)
+
+    cev_result = await db.execute(
+        select(
+            func.count().label("converted_count"),
+            func.coalesce(func.sum(ConversionEvent.value), 0).label("revenue"),
+        ).where(
+            ConversionEvent.org_id == org_id,
+            ConversionEvent.created_at >= dt_from,
+            ConversionEvent.created_at <= dt_to,
+            ConversionEvent.attora_campaign_id.in_(campaign_ids),
+        )
+    )
+    cev_row = cev_result.one()
+    total_conversions = int(cev_row.converted_count)
+
+    return {
+        "total_conversations": total_conversations,
+        "total_conversions": total_conversions,
+        "total_revenue": float(cev_row.revenue),
+        "funnel_conversations": total_conversations,
+        "funnel_qualified": funnel_qualified,
+        "funnel_converted": total_conversions,
+    }
 
 
 async def get_dashboard_overview(

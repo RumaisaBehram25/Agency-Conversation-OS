@@ -42,16 +42,27 @@ logger = logging.getLogger(__name__)
 _UTM_FIELD_KEYS = ("utm_source", "utm_medium", "utm_campaign", "utm_content")
 
 
+def _is_manychat_placeholder(value: object) -> bool:
+    """Return True if value is an unresolved ManyChat template like {{first_name}}."""
+    if not isinstance(value, str):
+        return False
+    s = value.strip()
+    return s.startswith("{{") and s.endswith("}}")
+
+
+def _clean(custom_fields: dict, key: str) -> str | None:
+    """Return custom_fields[key] if it exists and is not a ManyChat placeholder, else None."""
+    v = custom_fields.get(key)
+    if not v or _is_manychat_placeholder(v):
+        return None
+    return str(v).strip() or None
+
+
 def _utm_from_custom_fields(custom_fields: dict) -> dict[str, str | None]:
     """Normalize UTM strings from webhook / intake custom_fields."""
     out: dict[str, str | None] = {}
     for key in _UTM_FIELD_KEYS:
-        v = custom_fields.get(key)
-        if v is None:
-            out[key] = None
-            continue
-        s = str(v).strip()
-        out[key] = s if s else None
+        out[key] = _clean(custom_fields, key)
     return out
 
 
@@ -346,27 +357,35 @@ async def _get_or_create_subscriber(
     subscriber = result.scalar_one_or_none()
 
     if subscriber:
-        # Update name if available and not already set
-        if custom_fields.get("first_name") and not subscriber.first_name:
-            subscriber.first_name = custom_fields["first_name"]
-        if custom_fields.get("last_name") and not subscriber.last_name:
-            subscriber.last_name = custom_fields["last_name"]
-        # Update contact info if available
-        if custom_fields.get("email") and not subscriber.email:
-            subscriber.email = custom_fields["email"]
-        if custom_fields.get("phone") and not subscriber.phone:
-            subscriber.phone = custom_fields["phone"]
+        # Update identity — skip unresolved ManyChat template placeholders like {{first_name}}
+        first_name = _clean(custom_fields, "first_name")
+        if first_name:
+            subscriber.first_name = first_name
+        last_name = _clean(custom_fields, "last_name")
+        if last_name:
+            subscriber.last_name = last_name
+        email = _clean(custom_fields, "email")
+        if email:
+            subscriber.email = email
+        phone = _clean(custom_fields, "phone")
+        if phone:
+            subscriber.phone = phone
         # Update attribution if available
-        if custom_fields.get("ctwa_clid") and not subscriber.ctwa_clid:
-            subscriber.ctwa_clid = custom_fields["ctwa_clid"]
-        if custom_fields.get("ad_id") and not subscriber.ad_id:
-            subscriber.ad_id = custom_fields["ad_id"]
-        if custom_fields.get("post_id") and not subscriber.post_id:
-            subscriber.post_id = custom_fields["post_id"]
-        if custom_fields.get("ad_set_id") and not subscriber.ad_set_id:
-            subscriber.ad_set_id = custom_fields["ad_set_id"]
-        if custom_fields.get("campaign_id") and not subscriber.campaign_id:
-            subscriber.campaign_id = custom_fields["campaign_id"]
+        ctwa_clid = _clean(custom_fields, "ctwa_clid")
+        if ctwa_clid and not subscriber.ctwa_clid:
+            subscriber.ctwa_clid = ctwa_clid
+        ad_id = _clean(custom_fields, "ad_id")
+        if ad_id and not subscriber.ad_id:
+            subscriber.ad_id = ad_id
+        post_id = _clean(custom_fields, "post_id")
+        if post_id and not subscriber.post_id:
+            subscriber.post_id = post_id
+        ad_set_id = _clean(custom_fields, "ad_set_id")
+        if ad_set_id and not subscriber.ad_set_id:
+            subscriber.ad_set_id = ad_set_id
+        campaign_id = _clean(custom_fields, "campaign_id")
+        if campaign_id and not subscriber.campaign_id:
+            subscriber.campaign_id = campaign_id
         # Resolve post_id from cached ad creatives if still missing
         if not subscriber.post_id and subscriber.ad_id:
             cached = await _lookup_post_id_from_ad_id(db, org_id, subscriber.ad_id)
@@ -374,7 +393,7 @@ async def _get_or_create_subscriber(
                 subscriber.post_id = cached
         # Direct attora_campaign_id pass-through (organic campaigns set this
         # explicitly from ManyChat since they have no Meta ID to look up by).
-        direct_attora_id = custom_fields.get("attora_campaign_id")
+        direct_attora_id = _clean(custom_fields, "attora_campaign_id")
         if direct_attora_id and subscriber.attora_campaign_id is None:
             try:
                 subscriber.attora_campaign_id = uuid.UUID(direct_attora_id)
@@ -394,9 +413,10 @@ async def _get_or_create_subscriber(
         # link, not whatever they engaged with previously. Only overwrite
         # on a valid match so an unregistered keyword doesn't wipe a good
         # existing attribution.
-        if custom_fields.get("keyword"):
+        keyword = _clean(custom_fields, "keyword")
+        if keyword:
             resolved_organic = await _resolve_attora_campaign_by_keyword(
-                db, org_id, custom_fields["keyword"], manychat_subscriber_id
+                db, org_id, keyword, manychat_subscriber_id
             )
             if resolved_organic is not None:
                 subscriber.attora_campaign_id = resolved_organic
@@ -409,16 +429,16 @@ async def _get_or_create_subscriber(
     except ValueError:
         channel_enum = ChannelType.MESSENGER
 
-    ad_id = custom_fields.get("ad_id")
-    post_id = custom_fields.get("post_id")
+    ad_id = _clean(custom_fields, "ad_id")
+    post_id = _clean(custom_fields, "post_id")
     if not post_id and ad_id:
         post_id = await _lookup_post_id_from_ad_id(db, org_id, ad_id)
 
-    meta_campaign_id = custom_fields.get("campaign_id")
+    meta_campaign_id = _clean(custom_fields, "campaign_id")
     attora_campaign_id: uuid.UUID | None = None
     # Direct attora_campaign_id pass-through (organic campaigns set this
     # explicitly from ManyChat since they have no Meta ID to look up by).
-    direct_attora_id = custom_fields.get("attora_campaign_id")
+    direct_attora_id = _clean(custom_fields, "attora_campaign_id")
     if direct_attora_id:
         try:
             attora_campaign_id = uuid.UUID(direct_attora_id)
@@ -430,9 +450,10 @@ async def _get_or_create_subscriber(
         )
     # Organic-post attribution: route by ManyChat trigger keyword when no
     # Meta campaign_id is available (organic IG/FB posts have no ad ID).
-    if attora_campaign_id is None and custom_fields.get("keyword"):
+    keyword = _clean(custom_fields, "keyword")
+    if attora_campaign_id is None and keyword:
         attora_campaign_id = await _resolve_attora_campaign_by_keyword(
-            db, org_id, custom_fields["keyword"], manychat_subscriber_id
+            db, org_id, keyword, manychat_subscriber_id
         )
 
     utm = _utm_from_custom_fields(custom_fields)
@@ -440,16 +461,16 @@ async def _get_or_create_subscriber(
         org_id=org_id,
         manychat_subscriber_id=manychat_subscriber_id,
         channel=channel_enum,
-        first_name=custom_fields.get("first_name"),
-        last_name=custom_fields.get("last_name"),
-        email=custom_fields.get("email"),
-        phone=custom_fields.get("phone"),
+        first_name=_clean(custom_fields, "first_name"),
+        last_name=_clean(custom_fields, "last_name"),
+        email=_clean(custom_fields, "email"),
+        phone=_clean(custom_fields, "phone"),
         buyer_stage=BuyerStage.AWARENESS,
         first_message_at=datetime.now(timezone.utc),
-        ctwa_clid=custom_fields.get("ctwa_clid"),
+        ctwa_clid=_clean(custom_fields, "ctwa_clid"),
         ad_id=ad_id,
         post_id=post_id,
-        ad_set_id=custom_fields.get("ad_set_id"),
+        ad_set_id=_clean(custom_fields, "ad_set_id"),
         campaign_id=meta_campaign_id,
         attora_campaign_id=attora_campaign_id,
         utm_source=utm["utm_source"],

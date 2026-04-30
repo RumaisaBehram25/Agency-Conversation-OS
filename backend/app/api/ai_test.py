@@ -74,6 +74,12 @@ async def ai_test_chat(
     """
     await _require_admin(db, current_user.id, org_id)
 
+    # Enforce the attora_test_ prefix so playground subscribers always land
+    # in the Playground section (filtered by manychat_subscriber_id LIKE 'attora_test%').
+    subscriber_id = body.subscriber_id
+    if not subscriber_id.startswith("attora_test"):
+        subscriber_id = f"attora_test_{subscriber_id}"
+
     redis_client = None
     try:
         redis_client = get_redis_pool()
@@ -83,7 +89,7 @@ async def ai_test_chat(
     try:
         ai_response = await process_message(
             org_id=org_id,
-            subscriber_id=body.subscriber_id,
+            subscriber_id=subscriber_id,
             message=body.message,
             channel=body.channel,
             custom_fields=body.custom_fields or {},
@@ -103,7 +109,7 @@ async def ai_test_chat(
     sub_result = await db.execute(
         select(Subscriber).where(
             Subscriber.org_id == org_id,
-            Subscriber.manychat_subscriber_id == body.subscriber_id,
+            Subscriber.manychat_subscriber_id == subscriber_id,
         )
     )
     subscriber = sub_result.scalar_one_or_none()
@@ -149,10 +155,15 @@ async def ai_test_reset(
     """
     await _require_admin(db, current_user.id, org_id)
 
+    # Apply the same prefix normalization as the chat endpoint.
+    subscriber_id = body.subscriber_id
+    if not subscriber_id.startswith("attora_test"):
+        subscriber_id = f"attora_test_{subscriber_id}"
+
     sub_result = await db.execute(
         select(Subscriber).where(
             Subscriber.org_id == org_id,
-            Subscriber.manychat_subscriber_id == body.subscriber_id,
+            Subscriber.manychat_subscriber_id == subscriber_id,
         )
     )
     subscriber = sub_result.scalar_one_or_none()

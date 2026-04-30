@@ -12,7 +12,7 @@ interface Turn {
   timestamp: number;
 }
 
-const DEFAULT_SUBSCRIBER_ID = 'attora_test';
+const DEFAULT_SUBSCRIBER_ID = 'attora_test_playground';
 
 export default function PlaygroundPage() {
   const [subscriberId, setSubscriberId] = useState(DEFAULT_SUBSCRIBER_ID);
@@ -126,8 +126,9 @@ export default function PlaygroundPage() {
               placeholder={DEFAULT_SUBSCRIBER_ID}
             />
             <p className="mt-1 text-[11px] text-gray-500">
-              Auto-created if missing. Prefix <span className="font-mono">attora_test_</span>{' '}
-              makes it easy to filter out of analytics.
+              Auto-created if missing. Must start with{' '}
+              <span className="font-mono">attora_test</span> to appear in the
+              Playground section — the prefix is added automatically if missing.
             </p>
           </div>
 

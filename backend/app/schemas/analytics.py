@@ -144,3 +144,14 @@ class ManyChatFlowStatsResponse(BaseModel):
     sent: ManyChatMetricCard = ManyChatMetricCard()
     clicked: ManyChatMetricCard = ManyChatMetricCard()
     flows: list[ManyChatFlowStat] = []
+
+
+class OrganicKeywordStatsResponse(BaseModel):
+    """GET /api/analytics/organic-keyword-stats — counts for macros/muscles keyword conversations."""
+
+    total_conversations: int = 0
+    total_conversions: int = 0
+    total_revenue: float = 0.0
+    funnel_conversations: int = 0
+    funnel_qualified: int = 0
+    funnel_converted: int = 0

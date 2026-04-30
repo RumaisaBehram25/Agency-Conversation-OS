@@ -148,15 +148,19 @@ async def manychat_webhook(
     if request.subscriber.custom_fields:
         cf = request.subscriber.custom_fields
         custom_fields = cf.model_dump(exclude_none=True)
-        # Also include subscriber identity info
-        if request.subscriber.first_name:
-            custom_fields["first_name"] = request.subscriber.first_name
-        if request.subscriber.last_name:
-            custom_fields["last_name"] = request.subscriber.last_name
-        if request.subscriber.phone:
-            custom_fields["phone"] = request.subscriber.phone
-        if request.subscriber.email:
-            custom_fields["email"] = request.subscriber.email
+
+    # Always capture identity from the subscriber object — ManyChat sends
+    # these as top-level subscriber fields regardless of whether custom_fields
+    # is present. Extracting them inside the custom_fields block caused them
+    # to be silently dropped whenever custom_fields was null.
+    if request.subscriber.first_name:
+        custom_fields["first_name"] = request.subscriber.first_name
+    if request.subscriber.last_name:
+        custom_fields["last_name"] = request.subscriber.last_name
+    if request.subscriber.phone:
+        custom_fields["phone"] = request.subscriber.phone
+    if request.subscriber.email:
+        custom_fields["email"] = request.subscriber.email
 
     # Log attribution fields so we can trace organic vs paid and debug 14-vs-8 gaps.
     _post_id  = custom_fields.get("post_id")  or "(none)"
@@ -271,5 +275,12 @@ async def manychat_webhook(
                 "Failed to persist manychat webhook event: org=%s subscriber=%s flow_id=%s",
                 org_id, subscriber_id, flow_id,
             )
+            # If the flush poisoned the session (e.g. after a prior _safe_rollback left
+            # the connection in a broken state), roll back so get_db's commit succeeds
+            # and the fallback response is delivered instead of a 500.
+            try:
+                await db.rollback()
+            except Exception:
+                pass
 
     return webhook_response

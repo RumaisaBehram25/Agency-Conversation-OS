@@ -61,6 +61,30 @@ export async function getAIPerformance(filters: {
   return response.data;
 }
 
+export interface OrganicKeywordStats {
+  total_conversations: number;
+  total_conversions: number;
+  total_revenue: number;
+  funnel_conversations: number;
+  funnel_qualified: number;
+  funnel_converted: number;
+}
+
+export async function getOrganicKeywordStats(filters: {
+  date_from?: string;
+  date_to?: string;
+  keyword?: string;
+} = {}): Promise<OrganicKeywordStats> {
+  const params = new URLSearchParams();
+  if (filters.date_from) params.set('date_from', filters.date_from);
+  if (filters.date_to) params.set('date_to', filters.date_to);
+  if (filters.keyword) params.set('keyword', filters.keyword);
+  const response = await client.get<OrganicKeywordStats>(
+    `/analytics/organic-keyword-stats?${params.toString()}`
+  );
+  return response.data;
+}
+
 export function getExportUrl(filters: AnalyticsFilters = {}): string {
   const params = new URLSearchParams();
   if (filters.date_from) params.set('date_from', filters.date_from);

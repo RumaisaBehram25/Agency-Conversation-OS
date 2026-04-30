@@ -80,6 +80,10 @@ class ManyChatWebhookRequest(BaseModel):
         default="messenger",
         description="Messaging channel: whatsapp, messenger, instagram",
     )
+    flow_id: str | None = Field(None, description="ManyChat flow ID that triggered this webhook")
+    event_type: str | None = Field(None, description="Event type (e.g. 'sent', 'clicked')")
+    clicked: bool | None = Field(None, description="True if a button/quick reply was clicked")
+    button_clicked: bool | None = Field(None, description="True if a button was clicked")
 
 
 # ── ManyChat Webhook Response (v2 format) ─────────────────────

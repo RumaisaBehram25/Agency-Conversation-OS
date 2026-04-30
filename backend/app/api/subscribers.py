@@ -39,6 +39,7 @@ async def list_subscribers(
     date_to: date | None = Query(None),
     is_converted: bool | None = Query(None),
     hyros_status: str | None = Query(None),
+    is_test: bool | None = Query(None, description="True=playground (attora_test* subscribers), False=real clients only, None=all"),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
 ) -> PaginatedResponse[SubscriberListItem]:
@@ -105,6 +106,14 @@ async def list_subscribers(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Invalid hyros_status. Must be one of: purchased, lead, unknown",
             )
+
+    if is_test is not None:
+        if is_test:
+            query = query.where(Subscriber.manychat_subscriber_id.like("attora_test%"))
+            count_query = count_query.where(Subscriber.manychat_subscriber_id.like("attora_test%"))
+        else:
+            query = query.where(~Subscriber.manychat_subscriber_id.like("attora_test%"))
+            count_query = count_query.where(~Subscriber.manychat_subscriber_id.like("attora_test%"))
 
     # Count total
     total_result = await db.execute(count_query)

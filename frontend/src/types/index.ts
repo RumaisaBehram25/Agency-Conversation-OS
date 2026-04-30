@@ -351,6 +351,16 @@ export interface FunnelStep {
   drop_off_rate: number | null;
 }
 
+export interface OrganicPostBreakdown {
+  post_id: string;
+  channel: string | null;
+  conversations: number;
+  qualified: number;
+  converted: number;
+  qualification_rate: number | null;
+  conversion_rate: number | null;
+}
+
 export interface AnalyticsResponse {
   cpqc: number;
   ccr: number;
@@ -363,6 +373,7 @@ export interface AnalyticsResponse {
   funnel: FunnelStep[];
   cpqc_trend: DailyTrend[];
   ccr_trend: DailyTrend[];
+  organic_posts: OrganicPostBreakdown[];
 }
 
 export interface ROIResponse {
@@ -385,6 +396,36 @@ export interface AIPerformanceResponse {
   avg_response_time_ms: number;
   total_ai_tokens: number;
   total_ai_cost: number;
+}
+
+export interface ManyChatMetricSubscriber {
+  manychat_subscriber_id: string;
+  name: string;
+  channel: string | null;
+}
+
+export interface ManyChatMetricCard {
+  count: number;
+  source: string;
+  subscribers: ManyChatMetricSubscriber[];
+}
+
+export interface ManyChatFlowStat {
+  flow_id: string;
+  flow_name: string | null;
+  channel: string;
+  sent: number;
+  clicked: number;
+}
+
+export interface ManyChatFlowStatsResponse {
+  page_id: string | null;
+  channel: string;
+  available: boolean;
+  message: string | null;
+  sent: ManyChatMetricCard;
+  clicked: ManyChatMetricCard;
+  flows: ManyChatFlowStat[];
 }
 
 // ─── Dashboard ───────────────────────────────────────────────────────────────

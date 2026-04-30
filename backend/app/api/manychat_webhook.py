@@ -21,6 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
 from app.models.organization import Organization
+from app.models.manychat_event import ManyChatEvent
 from app.redis import get_redis_pool
 from app.schemas.manychat import ManyChatWebhookRequest, ManyChatWebhookResponse
 from app.security.encryption import decrypt_value
@@ -140,6 +141,7 @@ async def manychat_webhook(
     subscriber_id = request.subscriber.id
     message = request.last_input_text
     channel = request.channel
+    flow_id = (request.flow_id or "").strip()
 
     # Extract custom fields as dict
     custom_fields: dict = {}
@@ -156,9 +158,22 @@ async def manychat_webhook(
         if request.subscriber.email:
             custom_fields["email"] = request.subscriber.email
 
+    # Log attribution fields so we can trace organic vs paid and debug 14-vs-8 gaps.
+    _post_id  = custom_fields.get("post_id")  or "(none)"
+    _ad_id    = custom_fields.get("ad_id")    or "(none)"
+    _ctwa     = custom_fields.get("ctwa_clid") or "(none)"
     logger.info(
-        f"Webhook received: org={org_id}, subscriber={subscriber_id}, "
-        f"channel={channel}, message_length={len(message)}"
+        "Webhook received: org=%s subscriber=%s channel=%s "
+        "post_id=%r ad_id=%r ctwa_clid=%r msg_len=%d",
+        org_id, subscriber_id, channel,
+        _post_id, _ad_id, _ctwa, len(message),
+    )
+
+    event_type_raw = (request.event_type or "").strip().lower()
+    is_click_event = bool(
+        request.clicked is True
+        or request.button_clicked is True
+        or event_type_raw in {"clicked", "click", "button_clicked", "button_click"}
     )
 
     # Get Redis client (non-fatal if unavailable)
@@ -182,32 +197,79 @@ async def manychat_webhook(
             ),
             timeout=_ENDPOINT_TIMEOUT_SECONDS,
         )
+        elapsed_ms = int((time.monotonic() - start_time) * 1000)
+        logger.info(
+            "Webhook response in %dms: org=%s subscriber=%s model=%s stage=%s handoff=%s",
+            elapsed_ms, org_id, subscriber_id,
+            ai_response.model_used, ai_response.buyer_stage, ai_response.needs_human_handoff,
+        )
+        webhook_response = ManyChatWebhookResponse.from_ai_response(
+            response_text=ai_response.response_text,
+            buyer_stage=ai_response.buyer_stage,
+            quick_replies=ai_response.suggested_quick_replies,
+            custom_field_updates=ai_response.custom_field_updates,
+        )
     except asyncio.TimeoutError:
         elapsed_ms = int((time.monotonic() - start_time) * 1000)
         logger.warning(
-            f"Webhook timeout after {elapsed_ms}ms for org={org_id}, "
-            f"subscriber={subscriber_id}"
+            "Webhook timeout after %dms: org=%s subscriber=%s",
+            elapsed_ms, org_id, subscriber_id,
         )
-        return get_fallback_manychat_response(FallbackType.BUYING_TIME)
+        webhook_response = get_fallback_manychat_response(FallbackType.BUYING_TIME)
     except Exception as e:
         elapsed_ms = int((time.monotonic() - start_time) * 1000)
         logger.error(
-            f"Webhook error after {elapsed_ms}ms for org={org_id}: {e}",
+            "Webhook error after %dms: org=%s error=%s",
+            elapsed_ms, org_id, e,
             exc_info=True,
         )
-        return get_fallback_manychat_response(FallbackType.ERROR)
+        webhook_response = get_fallback_manychat_response(FallbackType.ERROR)
 
-    # Build ManyChat v2 response
-    elapsed_ms = int((time.monotonic() - start_time) * 1000)
-    logger.info(
-        f"Webhook response in {elapsed_ms}ms: org={org_id}, "
-        f"subscriber={subscriber_id}, model={ai_response.model_used}, "
-        f"stage={ai_response.buyer_stage}, handoff={ai_response.needs_human_handoff}"
-    )
+    # Persist the webhook event AFTER process_message so it is never wiped by
+    # _safe_rollback: that helper calls db.rollback() on timeout/error paths
+    # (to unpoison the connection), which would silently erase any ManyChatEvent
+    # staged before the pipeline ran.  After process_message returns the session
+    # is either committed-clean (success) or rolled-back-clean (fallback) — safe
+    # to add new rows in both cases.
+    if flow_id:
+        try:
+            # Normalise channel: ManyChat sends "facebook" for Messenger flows;
+            # map it to "messenger" so it matches preferred_flow_ids_by_channel.
+            raw_ch = (channel or "messenger").lower()
+            norm_ch = "messenger" if raw_ch == "facebook" else raw_ch
 
-    return ManyChatWebhookResponse.from_ai_response(
-        response_text=ai_response.response_text,
-        buyer_stage=ai_response.buyer_stage,
-        quick_replies=ai_response.suggested_quick_replies,
-        custom_field_updates=ai_response.custom_field_updates,
-    )
+            logger.info(
+                "Persisting manychat event: org=%s subscriber=%s flow_id=%s channel=%s click=%s",
+                org_id, subscriber_id, flow_id, norm_ch, is_click_event,
+            )
+            db.add(
+                ManyChatEvent(
+                    org_id=org_id,
+                    manychat_subscriber_id=subscriber_id,
+                    flow_id=flow_id,
+                    event_type="sent",
+                    channel=norm_ch,
+                )
+            )
+            if is_click_event:
+                db.add(
+                    ManyChatEvent(
+                        org_id=org_id,
+                        manychat_subscriber_id=subscriber_id,
+                        flow_id=flow_id,
+                        event_type="clicked",
+                        channel=norm_ch,
+                    )
+                )
+            await db.flush()
+            logger.info(
+                "Manychat event flushed: org=%s subscriber=%s flow_id=%s",
+                org_id, subscriber_id, flow_id,
+            )
+        except Exception:
+            logger.exception(
+                "Failed to persist manychat webhook event: org=%s subscriber=%s flow_id=%s",
+                org_id, subscriber_id, flow_id,
+            )
+
+    return webhook_response

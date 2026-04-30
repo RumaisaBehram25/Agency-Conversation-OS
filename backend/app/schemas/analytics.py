@@ -29,6 +29,22 @@ class DailyTrend(BaseModel):
     value: float | None = None
 
 
+class OrganicPostBreakdown(BaseModel):
+    """Per-post metrics for organic traffic.
+
+    Organic = subscribers with post_id populated and ad_id NULL. Each row
+    represents one post_id and its attributed funnel volumes.
+    """
+
+    post_id: str
+    channel: str | None = None
+    conversations: int = 0
+    qualified: int = 0
+    converted: int = 0
+    qualification_rate: float | None = None
+    conversion_rate: float | None = None
+
+
 class AnalyticsResponse(BaseModel):
     """GET /api/analytics — Aggregated metrics for a date range."""
 
@@ -54,6 +70,9 @@ class AnalyticsResponse(BaseModel):
     # Daily trends
     cpqc_trend: list[DailyTrend] = []
     ccr_trend: list[DailyTrend] = []
+
+    # Per-post breakdown — only populated when organic=true is requested.
+    organic_posts: list[OrganicPostBreakdown] = []
 
 
 class ROIResponse(BaseModel):
@@ -87,3 +106,41 @@ class AIPerformanceResponse(BaseModel):
     avg_response_time_ms: int | None = None
     total_ai_tokens: int = 0
     total_ai_cost: float = 0.0
+
+
+class ManyChatMetricSubscriber(BaseModel):
+    """Subscriber entry shown in ManyChat metric detail modal."""
+
+    manychat_subscriber_id: str
+    name: str
+    channel: str | None = None
+
+
+class ManyChatMetricCard(BaseModel):
+    """Single metric card with count + subscriber drill-down."""
+
+    count: int = 0
+    source: str = "manychat_api"
+    subscribers: list[ManyChatMetricSubscriber] = []
+
+
+class ManyChatFlowStat(BaseModel):
+    """Per-flow engagement metrics from ManyChat."""
+
+    flow_id: str
+    flow_name: str | None = None
+    channel: str
+    sent: int = 0
+    clicked: int = 0
+
+
+class ManyChatFlowStatsResponse(BaseModel):
+    """Aggregated stats for selected ManyChat workflows."""
+
+    page_id: str | None = None
+    channel: str = "all"
+    available: bool = True
+    message: str | None = None
+    sent: ManyChatMetricCard = ManyChatMetricCard()
+    clicked: ManyChatMetricCard = ManyChatMetricCard()
+    flows: list[ManyChatFlowStat] = []

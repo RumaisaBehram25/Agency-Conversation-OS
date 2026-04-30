@@ -385,6 +385,21 @@ async def _get_or_create_subscriber(
             subscriber.attora_campaign_id = await _resolve_attora_campaign_id(
                 db, org_id, subscriber.campaign_id, manychat_subscriber_id
             )
+        # Organic-post attribution: re-resolve from the ManyChat trigger
+        # keyword on EVERY webhook that carries one. ManyChat only sets
+        # `keyword` on the comment-trigger webhook (not on follow-up message
+        # webhooks), so its presence is itself the "new trigger" signal —
+        # the user just commented on a (possibly different) post and we
+        # need to re-attribute them so the AI surfaces the right product
+        # link, not whatever they engaged with previously. Only overwrite
+        # on a valid match so an unregistered keyword doesn't wipe a good
+        # existing attribution.
+        if custom_fields.get("keyword"):
+            resolved_organic = await _resolve_attora_campaign_by_keyword(
+                db, org_id, custom_fields["keyword"], manychat_subscriber_id
+            )
+            if resolved_organic is not None:
+                subscriber.attora_campaign_id = resolved_organic
         _apply_utm_first_touch(subscriber, _utm_from_custom_fields(custom_fields))
         return subscriber
 
@@ -412,6 +427,12 @@ async def _get_or_create_subscriber(
     if attora_campaign_id is None and meta_campaign_id:
         attora_campaign_id = await _resolve_attora_campaign_id(
             db, org_id, meta_campaign_id, manychat_subscriber_id
+        )
+    # Organic-post attribution: route by ManyChat trigger keyword when no
+    # Meta campaign_id is available (organic IG/FB posts have no ad ID).
+    if attora_campaign_id is None and custom_fields.get("keyword"):
+        attora_campaign_id = await _resolve_attora_campaign_by_keyword(
+            db, org_id, custom_fields["keyword"], manychat_subscriber_id
         )
 
     utm = _utm_from_custom_fields(custom_fields)
@@ -470,6 +491,44 @@ async def _resolve_attora_campaign_id(
             subscriber_manychat_id,
             org_id,
             meta_campaign_id,
+        )
+    return campaign_id
+
+
+async def _resolve_attora_campaign_by_keyword(
+    db: AsyncSession,
+    org_id: uuid.UUID,
+    keyword: str,
+    subscriber_manychat_id: str,
+) -> uuid.UUID | None:
+    """
+    Look up an active organic AdCampaign for this org by ManyChat trigger keyword.
+
+    The (org_id, keyword) pair is unique by partial index, so at most one row
+    matches. We only consider source_type='organic' to keep paid attribution
+    on the meta_campaign_id path even if a paid campaign happens to carry a
+    keyword annotation.
+    """
+    normalized = keyword.strip().upper()
+    if not normalized:
+        return None
+    result = await db.execute(
+        select(AdCampaign.id).where(
+            AdCampaign.org_id == org_id,
+            AdCampaign.keyword == normalized,
+            AdCampaign.source_type == "organic",
+            AdCampaign.is_attora_managed.is_(True),
+            AdCampaign.is_active.is_(True),
+        )
+    )
+    campaign_id = result.scalar_one_or_none()
+    if campaign_id is None:
+        logger.warning(
+            "COMPLIANCE: subscriber=%s (org=%s) arrived via unregistered "
+            "keyword=%s — no active organic campaign matches",
+            subscriber_manychat_id,
+            org_id,
+            normalized,
         )
     return campaign_id
 

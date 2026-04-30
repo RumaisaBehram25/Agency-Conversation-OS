@@ -12,6 +12,7 @@ from sqlalchemy import func, select, and_, or_, case
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.analytics import DailyAnalytics
+from app.models.campaign import AdCampaign
 from app.models.campaign_metrics import CampaignMetric
 from app.models.conversation import Conversation
 from app.models.conversion import ConversionEvent
@@ -28,6 +29,72 @@ from app.schemas.analytics import (
 from app.schemas.dashboard import CampaignHealth
 
 
+def _campaigns_of_source_type_subquery(org_id: uuid.UUID, source_type: str):
+    """Subquery returning ad_campaigns.id for the given source_type in an org."""
+    return (
+        select(AdCampaign.id)
+        .where(
+            AdCampaign.org_id == org_id,
+            AdCampaign.source_type == source_type,
+        )
+        .scalar_subquery()
+    )
+
+
+def _subscriber_campaign_clause(
+    campaign_id: str | None,
+    attora_campaign_id: uuid.UUID | None,
+    *,
+    org_id: uuid.UUID | None = None,
+    source_type: str | None = None,
+):
+    """Build the per-campaign Subscriber filter clause.
+
+    Priority:
+    - attora_campaign_id (specific organic) → strict match on that one campaign
+    - campaign_id (specific paid) → that meta_campaign_id + organic NULL
+      (legacy semantic that credits organic-driven qualifications to the
+      running paid campaign)
+    - source_type aggregate (paid/organic) → IN (campaigns of that type).
+      For organic this is "any organic campaign in the org"; for paid it
+      excludes purely organic-attributed subscribers from the count.
+    """
+    if attora_campaign_id is not None:
+        return Subscriber.attora_campaign_id == attora_campaign_id
+    if campaign_id is not None:
+        return or_(Subscriber.campaign_id == campaign_id, Subscriber.campaign_id.is_(None))
+    if source_type is not None and org_id is not None:
+        return Subscriber.attora_campaign_id.in_(
+            _campaigns_of_source_type_subquery(org_id, source_type)
+        )
+    return None
+
+
+def _conversion_event_campaign_clause(
+    campaign_id: str | None,
+    attora_campaign_id: uuid.UUID | None,
+    *,
+    org_id: uuid.UUID | None = None,
+    source_type: str | None = None,
+):
+    """Build the per-campaign ConversionEvent filter clause.
+
+    Mirrors _subscriber_campaign_clause but for ConversionEvent rows.
+    """
+    if attora_campaign_id is not None:
+        return ConversionEvent.attora_campaign_id == attora_campaign_id
+    if campaign_id is not None:
+        return or_(
+            ConversionEvent.meta_campaign_id == campaign_id,
+            ConversionEvent.meta_campaign_id.is_(None),
+        )
+    if source_type is not None and org_id is not None:
+        return ConversionEvent.attora_campaign_id.in_(
+            _campaigns_of_source_type_subquery(org_id, source_type)
+        )
+    return None
+
+
 async def get_analytics(
     db: AsyncSession,
     org_id: uuid.UUID,
@@ -35,8 +102,14 @@ async def get_analytics(
     date_to: date,
     channel: str | None = None,
     campaign_id: str | None = None,
+    attora_campaign_id: uuid.UUID | None = None,
+    source_type: str | None = None,
 ) -> AnalyticsResponse:
     """Compute aggregated analytics metrics for a date range."""
+    # source_type is ignored when a specific campaign is selected — the more
+    # specific scope wins.
+    if campaign_id or attora_campaign_id is not None:
+        source_type = None
 
     # Base filter for daily_analytics.
     #
@@ -70,15 +143,53 @@ async def get_analytics(
         ).where(and_(*filters))
     )
     row = agg_result.one()
-    total_conversations = await _count_conversations_raw(db, org_id, date_from, date_to, channel)
-    total_conversions = int(row.total_conversions)
-    total_revenue = float(row.total_revenue)
+    # Headline counts should always reflect the active scope filter. The
+    # ORG-wide path falls through to DailyAnalytics aggregates; any specific
+    # campaign or source-type filter routes through subscriber/conversion
+    # tables so the numbers actually scope.
+    if campaign_id or attora_campaign_id is not None or source_type is not None:
+        dt_from_for_count = datetime(date_from.year, date_from.month, date_from.day, tzinfo=timezone.utc)
+        dt_to_for_count = datetime(date_to.year, date_to.month, date_to.day, 23, 59, 59, tzinfo=timezone.utc)
+        total_conversations = await _count_conversations_for_campaign(
+            db, org_id, dt_from_for_count, dt_to_for_count,
+            campaign_id=campaign_id,
+            attora_campaign_id=attora_campaign_id,
+            source_type=source_type,
+        )
+
+        # Conversions + revenue from ConversionEvent scoped to the same filter.
+        cev_clause = _conversion_event_campaign_clause(
+            campaign_id, attora_campaign_id, org_id=org_id, source_type=source_type
+        )
+        cev_filters = [
+            ConversionEvent.org_id == org_id,
+            ConversionEvent.created_at >= dt_from_for_count,
+            ConversionEvent.created_at <= dt_to_for_count,
+        ]
+        if cev_clause is not None:
+            cev_filters.append(cev_clause)
+        conv_result = await db.execute(
+            select(
+                func.count().label("converted_count"),
+                func.coalesce(func.sum(ConversionEvent.value), 0).label("revenue"),
+            ).where(*cev_filters)
+        )
+        conv_row = conv_result.one()
+        total_conversions = int(conv_row.converted_count)
+        total_revenue = float(conv_row.revenue)
+    else:
+        total_conversations = await _count_conversations_raw(db, org_id, date_from, date_to, channel)
+        total_conversions = int(row.total_conversions)
+        total_revenue = float(row.total_revenue)
     avg_response_time_ms = int(row.avg_response_time_ms) if row.avg_response_time_ms else None
 
     # CPQC numerator: org-wide ad_spend by default; campaign-scoped when
-    # campaign_id is provided. Organic flows have no spend, so the per-campaign
-    # numerator is exactly that campaign's spend (organic contributes $0).
-    if campaign_id:
+    # campaign_id is provided. Organic flows have no spend, so an
+    # attora_campaign_id-scoped view (or a source_type='organic' aggregate)
+    # forces the numerator to $0 — that's the intended client-facing semantic.
+    if attora_campaign_id is not None or source_type == "organic":
+        total_ad_spend = 0.0
+    elif campaign_id:
         spend_result = await db.execute(
             select(func.coalesce(func.sum(CampaignMetric.spend), 0))
             .where(
@@ -91,6 +202,9 @@ async def get_analytics(
         )
         total_ad_spend = float(spend_result.scalar() or 0)
     else:
+        # source_type='paid' or no source filter — use the org-wide ad_spend
+        # already aggregated in DailyAnalytics. (Paid is the only thing that
+        # produces spend, so this is effectively the same number for both.)
         total_ad_spend = float(row.total_ad_spend)
 
     # Count qualified subscribers — INTENT stage or above — for CPQC.
@@ -116,14 +230,16 @@ async def get_analytics(
         Subscriber.created_at >= dt_from,
         Subscriber.created_at <= dt_to,
     ]
-    # When scoped to a campaign, include that campaign's qualified subscribers
-    # plus organic (campaign_id IS NULL). Organic enters with $0 spend, which
-    # is the intended client-facing semantic: every campaign gets credit for
-    # organic-driven qualifications.
-    if campaign_id:
-        qualified_filters.append(
-            or_(Subscriber.campaign_id == campaign_id, Subscriber.campaign_id.is_(None))
-        )
+    # When scoped to a campaign or source aggregate, apply the per-campaign
+    # Subscriber clause:
+    #   - paid (campaign_id):     campaign + organic NULL  (legacy semantic)
+    #   - organic (attora_campaign_id): only that one Attora campaign
+    #   - source_type aggregate: any campaign of that source_type in the org
+    sub_clause = _subscriber_campaign_clause(
+        campaign_id, attora_campaign_id, org_id=org_id, source_type=source_type
+    )
+    if sub_clause is not None:
+        qualified_filters.append(sub_clause)
 
     qualified_result = await db.execute(
         select(func.count()).select_from(Subscriber).where(*qualified_filters)
@@ -151,7 +267,10 @@ async def get_analytics(
     if qualified_count > 0:
         if total_ad_spend > 0:
             cpqc = round(total_ad_spend / qualified_count, 2)
-        elif campaign_id:
+        elif campaign_id or attora_campaign_id or source_type == "organic":
+            # Explicit campaign scope (or organic aggregate) with $0 spend →
+            # meaningful "free leads" answer rather than the org-wide "—"
+            # we use for unattributed views.
             cpqc = 0.0
 
     # Compute CCR: conversions / total_conversations
@@ -169,10 +288,10 @@ async def get_analytics(
 
     # Daily trends
     cpqc_trend = await _compute_daily_cpqc_trend(
-        db, org_id, date_from, date_to, filters, campaign_id
+        db, org_id, date_from, date_to, filters, campaign_id, attora_campaign_id, source_type
     )
     ccr_trend = await _compute_daily_ccr_trend(
-        db, org_id, date_from, date_to, filters, campaign_id
+        db, org_id, date_from, date_to, filters, campaign_id, attora_campaign_id, source_type
     )
 
     return AnalyticsResponse(
@@ -223,6 +342,8 @@ async def _compute_daily_cpqc_trend(
     date_to: date,
     filters: list,
     campaign_id: str | None = None,
+    attora_campaign_id: uuid.UUID | None = None,
+    source_type: str | None = None,
 ) -> list[DailyTrend]:
     """Compute daily CPQC trend.
 
@@ -246,23 +367,44 @@ async def _compute_daily_cpqc_trend(
     dt_from = datetime(date_from.year, date_from.month, date_from.day, tzinfo=timezone.utc)
     dt_to = datetime(date_to.year, date_to.month, date_to.day, 23, 59, 59, tzinfo=timezone.utc)
 
-    if campaign_id:
-        spend_rows = await db.execute(
-            select(
-                CampaignMetric.date,
-                func.coalesce(func.sum(CampaignMetric.spend), 0).label("ad_spend"),
+    if campaign_id or attora_campaign_id is not None or source_type is not None:
+        # Spend: only paid campaigns produce CampaignMetric rows. Organic
+        # (attora_campaign_id-only or source_type='organic') trends always
+        # show $0 spend → null CPQC, which renders as a gap rather than a
+        # misleading flat zero.
+        if attora_campaign_id is not None or source_type == "organic":
+            spend_by_date = {}
+        elif source_type == "paid":
+            # Org-wide paid spend by day from DailyAnalytics.
+            spend_rows = await db.execute(
+                select(
+                    DailyAnalytics.date,
+                    func.coalesce(func.sum(DailyAnalytics.ad_spend), 0).label("ad_spend"),
+                )
+                .where(and_(*filters))
+                .group_by(DailyAnalytics.date)
             )
-            .where(
-                CampaignMetric.org_id == org_id,
-                CampaignMetric.level == "campaign",
-                CampaignMetric.meta_campaign_id == campaign_id,
-                CampaignMetric.date >= date_from,
-                CampaignMetric.date <= date_to,
+            spend_by_date = {r.date: float(r.ad_spend) for r in spend_rows.all()}
+        else:
+            spend_rows = await db.execute(
+                select(
+                    CampaignMetric.date,
+                    func.coalesce(func.sum(CampaignMetric.spend), 0).label("ad_spend"),
+                )
+                .where(
+                    CampaignMetric.org_id == org_id,
+                    CampaignMetric.level == "campaign",
+                    CampaignMetric.meta_campaign_id == campaign_id,
+                    CampaignMetric.date >= date_from,
+                    CampaignMetric.date <= date_to,
+                )
+                .group_by(CampaignMetric.date)
             )
-            .group_by(CampaignMetric.date)
-        )
-        spend_by_date = {r.date: float(r.ad_spend) for r in spend_rows.all()}
+            spend_by_date = {r.date: float(r.ad_spend) for r in spend_rows.all()}
 
+        sub_clause = _subscriber_campaign_clause(
+            campaign_id, attora_campaign_id, org_id=org_id, source_type=source_type
+        )
         qualified_rows = await db.execute(
             select(
                 func.date(Subscriber.created_at).label("d"),
@@ -273,7 +415,7 @@ async def _compute_daily_cpqc_trend(
                 Subscriber.buyer_stage.in_(qualified_stages),
                 Subscriber.created_at >= dt_from,
                 Subscriber.created_at <= dt_to,
-                or_(Subscriber.campaign_id == campaign_id, Subscriber.campaign_id.is_(None)),
+                sub_clause,
             )
             .group_by(func.date(Subscriber.created_at))
         )
@@ -322,6 +464,8 @@ async def _compute_daily_ccr_trend(
     date_to: date,
     filters: list,
     campaign_id: str | None = None,
+    attora_campaign_id: uuid.UUID | None = None,
+    source_type: str | None = None,
 ) -> list[DailyTrend]:
     """Compute daily CCR trend.
 
@@ -333,7 +477,7 @@ async def _compute_daily_ccr_trend(
     Days with no conversations emit value=None so the chart shows gaps
     instead of misleading flat zeros.
     """
-    if not campaign_id:
+    if not campaign_id and attora_campaign_id is None and source_type is None:
         result = await db.execute(
             select(
                 DailyAnalytics.date,
@@ -359,6 +503,9 @@ async def _compute_daily_ccr_trend(
     dt_to = datetime(date_to.year, date_to.month, date_to.day, 23, 59, 59, tzinfo=timezone.utc)
     activity_ts = func.coalesce(Conversation.last_activity_at, Conversation.created_at)
 
+    sub_clause = _subscriber_campaign_clause(
+        campaign_id, attora_campaign_id, org_id=org_id, source_type=source_type
+    )
     conv_rows = await db.execute(
         select(
             func.date(activity_ts).label("d"),
@@ -370,12 +517,15 @@ async def _compute_daily_ccr_trend(
             Conversation.org_id == org_id,
             activity_ts >= dt_from,
             activity_ts <= dt_to,
-            or_(Subscriber.campaign_id == campaign_id, Subscriber.campaign_id.is_(None)),
+            sub_clause,
         )
         .group_by(func.date(activity_ts))
     )
     conversations_by_date = {r.d: int(r.conversations) for r in conv_rows.all()}
 
+    cev_clause = _conversion_event_campaign_clause(
+        campaign_id, attora_campaign_id, org_id=org_id, source_type=source_type
+    )
     conversion_rows = await db.execute(
         select(
             func.date(ConversionEvent.created_at).label("d"),
@@ -385,10 +535,7 @@ async def _compute_daily_ccr_trend(
             ConversionEvent.org_id == org_id,
             ConversionEvent.created_at >= dt_from,
             ConversionEvent.created_at <= dt_to,
-            or_(
-                ConversionEvent.meta_campaign_id == campaign_id,
-                ConversionEvent.meta_campaign_id.is_(None),
-            ),
+            cev_clause,
         )
         .group_by(func.date(ConversionEvent.created_at))
     )
@@ -411,6 +558,8 @@ async def get_roi(
     date_from: date,
     date_to: date,
     campaign_id: str | None = None,
+    attora_campaign_id: uuid.UUID | None = None,
+    source_type: str | None = None,
 ) -> ROIResponse:
     """Compute ROI / money metrics.
 
@@ -421,24 +570,47 @@ async def get_roi(
     Without campaign_id, ROI is org-wide and reads from daily_analytics.
     """
 
+    # source_type is ignored when a specific campaign is selected.
+    if campaign_id or attora_campaign_id is not None:
+        source_type = None
+
     dt_from = datetime(date_from.year, date_from.month, date_from.day, tzinfo=timezone.utc)
     dt_to = datetime(date_to.year, date_to.month, date_to.day, 23, 59, 59, tzinfo=timezone.utc)
 
-    if campaign_id:
-        # ── Spend from campaign_metrics (same source as the dropdown) ────
-        spend_result = await db.execute(
-            select(func.coalesce(func.sum(CampaignMetric.spend), 0))
-            .where(
-                CampaignMetric.org_id == org_id,
-                CampaignMetric.level == "campaign",
-                CampaignMetric.meta_campaign_id == campaign_id,
-                CampaignMetric.date >= date_from,
-                CampaignMetric.date <= date_to,
+    if campaign_id or attora_campaign_id is not None or source_type is not None:
+        # ── Spend: paid via CampaignMetric, organic forced to $0 ────────
+        if attora_campaign_id is not None or source_type == "organic":
+            ad_spend = 0.0
+        elif source_type == "paid":
+            # All paid spend in the org — same as the org-wide DailyAnalytics
+            # aggregate, since paid is the only thing that produces ad_spend.
+            spend_result = await db.execute(
+                select(func.coalesce(func.sum(DailyAnalytics.ad_spend), 0))
+                .where(
+                    DailyAnalytics.org_id == org_id,
+                    DailyAnalytics.date >= date_from,
+                    DailyAnalytics.date <= date_to,
+                    DailyAnalytics.channel.is_(None),
+                )
             )
-        )
-        ad_spend = float(spend_result.scalar() or 0)
+            ad_spend = float(spend_result.scalar() or 0)
+        else:
+            spend_result = await db.execute(
+                select(func.coalesce(func.sum(CampaignMetric.spend), 0))
+                .where(
+                    CampaignMetric.org_id == org_id,
+                    CampaignMetric.level == "campaign",
+                    CampaignMetric.meta_campaign_id == campaign_id,
+                    CampaignMetric.date >= date_from,
+                    CampaignMetric.date <= date_to,
+                )
+            )
+            ad_spend = float(spend_result.scalar() or 0)
 
-        # ── Conversions + revenue from ConversionEvent (campaign + organic) ──
+        # ── Conversions + revenue from ConversionEvent ──
+        cev_clause = _conversion_event_campaign_clause(
+            campaign_id, attora_campaign_id, org_id=org_id, source_type=source_type
+        )
         conv_result = await db.execute(
             select(
                 func.count().label("converted_count"),
@@ -448,10 +620,7 @@ async def get_roi(
                 ConversionEvent.org_id == org_id,
                 ConversionEvent.created_at >= dt_from,
                 ConversionEvent.created_at <= dt_to,
-                or_(
-                    ConversionEvent.meta_campaign_id == campaign_id,
-                    ConversionEvent.meta_campaign_id.is_(None),
-                ),
+                cev_clause,
             )
         )
         conv_row = conv_result.one()
@@ -460,7 +629,7 @@ async def get_roi(
 
         # ── Conversations: count via subscribers attributed to the campaign ──
         conversations_count = await _count_conversations_for_campaign(
-            db, org_id, dt_from, dt_to, campaign_id
+            db, org_id, dt_from, dt_to, campaign_id, attora_campaign_id, source_type
         )
     else:
         # Org-wide: read from daily_analytics on the channel=NULL combined row.
@@ -496,10 +665,11 @@ async def get_roi(
         Subscriber.created_at >= dt_from,
         Subscriber.created_at <= dt_to,
     ]
-    if campaign_id:
-        qualified_filters.append(
-            or_(Subscriber.campaign_id == campaign_id, Subscriber.campaign_id.is_(None))
-        )
+    sub_clause = _subscriber_campaign_clause(
+        campaign_id, attora_campaign_id, org_id=org_id, source_type=source_type
+    )
+    if sub_clause is not None:
+        qualified_filters.append(sub_clause)
     qualified_result = await db.execute(
         select(func.count())
         .select_from(Subscriber)
@@ -668,26 +838,34 @@ async def _count_conversations_for_campaign(
     org_id: uuid.UUID,
     dt_from: datetime,
     dt_to: datetime,
-    campaign_id: str,
+    campaign_id: str | None,
+    attora_campaign_id: uuid.UUID | None = None,
+    source_type: str | None = None,
 ) -> int:
-    """Count conversations whose subscriber is attributed to this campaign or organic.
+    """Count conversations whose subscriber is attributed to this campaign.
 
-    Conversations don't carry a direct campaign attribution, so we route through
-    Subscriber.campaign_id (which holds the meta_campaign_id string). Organic
-    conversations (campaign_id IS NULL) are included to match the CPQC and
-    qualified-count semantics used elsewhere in the per-campaign view.
+    Routes through Subscriber attribution since Conversation has no direct
+    campaign link. For paid (campaign_id) we include organic NULL to match
+    the existing 'campaign + organic' semantic; for organic we strictly
+    scope to the one attora_campaign_id; for source_type aggregate we scope
+    to all campaigns of that source type in the org.
     """
     activity_ts = func.coalesce(Conversation.last_activity_at, Conversation.created_at)
+    sub_clause = _subscriber_campaign_clause(
+        campaign_id, attora_campaign_id, org_id=org_id, source_type=source_type
+    )
+    where_clauses = [
+        Conversation.org_id == org_id,
+        activity_ts >= dt_from,
+        activity_ts <= dt_to,
+    ]
+    if sub_clause is not None:
+        where_clauses.append(sub_clause)
     result = await db.execute(
         select(func.count())
         .select_from(Conversation)
         .join(Subscriber, Subscriber.id == Conversation.subscriber_id)
-        .where(
-            Conversation.org_id == org_id,
-            activity_ts >= dt_from,
-            activity_ts <= dt_to,
-            or_(Subscriber.campaign_id == campaign_id, Subscriber.campaign_id.is_(None)),
-        )
+        .where(*where_clauses)
     )
     return int(result.scalar() or 0)
 

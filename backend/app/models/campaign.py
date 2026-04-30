@@ -10,7 +10,8 @@ CampaignUTM: stores generated UTM parameter sets for each campaign's funnel page
 
 import uuid
 
-from sqlalchemy import Boolean, ForeignKey, String, Text, UniqueConstraint, Uuid
+import sqlalchemy as sa
+from sqlalchemy import Boolean, ForeignKey, Index, String, Text, UniqueConstraint, Uuid
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base, OrgScopedMixin, TimestampMixin
@@ -28,6 +29,15 @@ class AdCampaign(Base, TimestampMixin, OrgScopedMixin):
     # Meta attribution — links to existing subscriber.campaign_id / ad_id fields
     meta_campaign_id: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
     meta_ad_set_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+
+    # 'paid'  → Meta paid campaign (meta_campaign_id is the join key)
+    # 'organic' → no Meta entity; routed by `keyword` from ManyChat trigger
+    source_type: Mapped[str] = mapped_column(String(20), default="paid", nullable=False, index=True)
+
+    # Comment-trigger keyword that routes leads to this campaign on subscriber
+    # upsert. Required for source_type='organic'; optional for 'paid'.
+    # Uniqueness enforced per-org via partial unique index (see __table_args__).
+    keyword: Mapped[str | None] = mapped_column(String(100), nullable=True, index=True)
 
     # Prerequisite story: flag specifying this campaign is Attora-managed
     is_attora_managed: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
@@ -50,8 +60,20 @@ class AdCampaign(Base, TimestampMixin, OrgScopedMixin):
     )
     subscribers = relationship("Subscriber", back_populates="attora_campaign")
 
+    __table_args__ = (
+        # Per-org keyword uniqueness — only enforced when keyword is set, so
+        # paid campaigns without a keyword don't collide on NULL.
+        Index(
+            "uq_ad_campaigns_org_keyword",
+            "org_id",
+            "keyword",
+            unique=True,
+            postgresql_where=sa.text("keyword IS NOT NULL"),
+        ),
+    )
+
     def __repr__(self) -> str:
-        return f"<AdCampaign(id={self.id}, name={self.name!r}, attora={self.is_attora_managed})>"
+        return f"<AdCampaign(id={self.id}, name={self.name!r}, source={self.source_type}, attora={self.is_attora_managed})>"
 
 
 class CampaignUTM(Base, TimestampMixin, OrgScopedMixin):

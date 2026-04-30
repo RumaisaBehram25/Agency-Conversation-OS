@@ -3,9 +3,9 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import { getAnalytics, getROI, getAIPerformance, getExportUrl } from '../api/analytics';
 import { getConversations } from '../api/conversations';
-import { getCampaigns } from '../api/campaigns';
+import { getCampaigns, listAdCampaigns } from '../api/campaigns';
 import { syncMetaNow, getMetaSyncStatus } from '../api/settings';
-import type { CampaignSummary } from '../types';
+import type { AdCampaign, CampaignSourceType, CampaignSummary } from '../types';
 import AnalyticsMetricCards from '../components/analytics/MetricCards';
 import FunnelChart from '../components/analytics/FunnelChart';
 import TrendChart from '../components/analytics/TrendChart';
@@ -13,7 +13,6 @@ import ROIWaterfall from '../components/analytics/ROIWaterfall';
 import BreakdownCharts from '../components/analytics/BreakdownCharts';
 import CampaignDrillDown from '../components/analytics/CampaignDrillDown';
 import DateRangePicker from '../components/ui/DateRangePicker';
-import Select from '../components/ui/Select';
 import Button from '../components/ui/Button';
 import LoadingSpinner from '../components/ui/LoadingSpinner';
 import { daysAgoISO, todayISO, formatPercentRaw, formatDuration, formatCurrency } from '../utils/formatters';
@@ -27,11 +26,20 @@ import {
   ResponsiveContainer,
 } from 'recharts';
 
+type SourceFilter = 'all' | CampaignSourceType;
+
 export default function AnalyticsPage() {
   const queryClient = useQueryClient();
   const [dateFrom, setDateFrom] = useState(daysAgoISO(30));
   const [dateTo, setDateTo] = useState(todayISO());
+  // Two-part selector: source-type filter chips + a campaign dropdown.
+  // For paid we key by meta_campaign_id (string); for organic we key by
+  // attora_campaign_id (UUID). selectedCampaign is the value from the dropdown
+  // and selectedCampaignSource tells us how to interpret it.
+  const [sourceFilter, setSourceFilter] = useState<SourceFilter>('all');
   const [selectedCampaign, setSelectedCampaign] = useState<string>('');
+  const [selectedCampaignSource, setSelectedCampaignSource] =
+    useState<CampaignSourceType>('paid');
   const [syncing, setSyncing] = useState(false);
   const [syncStatus, setSyncStatus] = useState<string | null>(null);
   const [syncProgress, setSyncProgress] = useState(0);
@@ -55,20 +63,54 @@ export default function AnalyticsPage() {
     queryFn: () => getCampaigns(dateRange),
   });
 
+  const { data: organicCampaigns = [] } = useQuery<AdCampaign[]>({
+    queryKey: ['ad-campaigns-organic'],
+    queryFn: () => listAdCampaigns({ source_type: 'organic', is_active: true }),
+  });
+
+  // Build the campaign-scope query params:
+  //   • specific paid campaign  → campaign_id (meta_campaign_id string)
+  //   • specific organic campaign → attora_campaign_id (UUID)
+  //   • source-type chip only (no specific campaign) → source_type aggregate
+  //   • neither → no scoping (org-wide)
+  const campaignScope: {
+    campaign_id?: string;
+    attora_campaign_id?: string;
+    source_type?: 'paid' | 'organic';
+  } = selectedCampaign
+    ? selectedCampaignSource === 'organic'
+      ? { attora_campaign_id: selectedCampaign }
+      : { campaign_id: selectedCampaign }
+    : sourceFilter !== 'all'
+      ? { source_type: sourceFilter }
+      : {};
+
   const analyticsQuery = useQuery({
-    queryKey: ['analytics', dateRange, selectedCampaign],
+    queryKey: [
+      'analytics',
+      dateRange,
+      selectedCampaign,
+      selectedCampaignSource,
+      sourceFilter,
+    ],
     queryFn: () =>
       getAnalytics({
         ...dateRange,
-        ...(selectedCampaign ? { campaign_id: selectedCampaign } : {}),
+        ...campaignScope,
       }),
   });
   const roiQuery = useQuery({
-    queryKey: ['roi', dateRange, selectedCampaign],
+    queryKey: [
+      'roi',
+      dateRange,
+      selectedCampaign,
+      selectedCampaignSource,
+      sourceFilter,
+    ],
     queryFn: () =>
       getROI({
         ...dateRange,
-        ...(selectedCampaign ? { campaign_id: selectedCampaign } : {}),
+        ...campaignScope,
       }),
   });
   const aiPerfQuery = useQuery({
@@ -95,13 +137,18 @@ export default function AnalyticsPage() {
 
   const load = useCallback(async () => {
     await Promise.all([
-      queryClient.invalidateQueries({ queryKey: ['analytics', dateRange, selectedCampaign] }),
-      queryClient.invalidateQueries({ queryKey: ['roi', dateRange, selectedCampaign] }),
+      queryClient.invalidateQueries({
+        queryKey: ['analytics', dateRange, selectedCampaign, selectedCampaignSource, sourceFilter],
+      }),
+      queryClient.invalidateQueries({
+        queryKey: ['roi', dateRange, selectedCampaign, selectedCampaignSource, sourceFilter],
+      }),
       queryClient.invalidateQueries({ queryKey: ['ai-performance', dateRange] }),
       queryClient.invalidateQueries({ queryKey: ['conversations-count', dateRange] }),
       queryClient.invalidateQueries({ queryKey: ['campaigns-for-analytics', dateRange] }),
+      queryClient.invalidateQueries({ queryKey: ['ad-campaigns-organic'] }),
     ]);
-  }, [queryClient, dateRange, selectedCampaign]);
+  }, [queryClient, dateRange, selectedCampaign, selectedCampaignSource, sourceFilter]);
 
   useEffect(() => {
     return () => {
@@ -255,9 +302,49 @@ export default function AnalyticsPage() {
             Performance metrics, funnel analysis, and ROI reporting
           </p>
         </div>
-        <div className="flex items-center gap-3">
-          <Select
-            options={campaigns.map((c) => {
+        <div className="flex flex-wrap items-center gap-3">
+          <div
+            role="radiogroup"
+            aria-label="Campaign source filter"
+            className="inline-flex overflow-hidden rounded-md border border-gray-300 bg-white text-xs font-medium"
+          >
+            {(['all', 'paid', 'organic'] as const).map((opt) => {
+              const active = sourceFilter === opt;
+              return (
+                <button
+                  key={opt}
+                  type="button"
+                  role="radio"
+                  aria-checked={active}
+                  onClick={() => {
+                    setSourceFilter(opt);
+                    // Clear the campaign selection when the filter no longer
+                    // contains it — avoids stale scoped queries.
+                    if (
+                      selectedCampaign &&
+                      ((opt === 'paid' && selectedCampaignSource === 'organic') ||
+                        (opt === 'organic' && selectedCampaignSource === 'paid'))
+                    ) {
+                      setSelectedCampaign('');
+                    }
+                  }}
+                  className={
+                    active
+                      ? opt === 'organic'
+                        ? 'bg-emerald-600 px-3 py-1.5 text-white'
+                        : opt === 'paid'
+                          ? 'bg-blue-600 px-3 py-1.5 text-white'
+                          : 'bg-gray-900 px-3 py-1.5 text-white'
+                      : 'bg-white px-3 py-1.5 text-gray-700 hover:bg-gray-50'
+                  }
+                >
+                  {opt === 'all' ? 'All' : opt === 'paid' ? 'Paid' : 'Organic'}
+                </button>
+              );
+            })}
+          </div>
+          {(() => {
+            const paidOptions = campaigns.map((c) => {
               const name = c.meta_campaign_name || 'Unnamed';
               const status = c.status
                 ? ` (${c.status.charAt(0).toUpperCase() + c.status.slice(1)})`
@@ -265,13 +352,55 @@ export default function AnalyticsPage() {
               return {
                 value: c.meta_campaign_id,
                 label: `${name}${status}`,
+                source: 'paid' as CampaignSourceType,
               };
-            })}
-            placeholder="All Campaigns"
-            value={selectedCampaign}
-            onChange={(e) => setSelectedCampaign(e.target.value)}
-            className="w-56"
-          />
+            });
+            const organicOptions = organicCampaigns.map((c) => ({
+              value: c.id,
+              label: `${c.name}${c.keyword ? ` [${c.keyword}]` : ''}`,
+              source: 'organic' as CampaignSourceType,
+            }));
+            const filteredOptions =
+              sourceFilter === 'paid'
+                ? paidOptions
+                : sourceFilter === 'organic'
+                  ? organicOptions
+                  : [...paidOptions, ...organicOptions];
+
+            return (
+              <select
+                value={selectedCampaign}
+                onChange={(e) => {
+                  const v = e.target.value;
+                  setSelectedCampaign(v);
+                  if (!v) return;
+                  const match = filteredOptions.find((o) => o.value === v);
+                  if (match) setSelectedCampaignSource(match.source);
+                }}
+                className="w-64 rounded-md border border-gray-300 bg-white px-3 py-2 text-sm focus:border-blue-400 focus:outline-none focus:ring-1 focus:ring-blue-300"
+              >
+                <option value="">All Campaigns</option>
+                {sourceFilter !== 'organic' && paidOptions.length > 0 && (
+                  <optgroup label="Paid">
+                    {paidOptions.map((o) => (
+                      <option key={`paid-${o.value}`} value={o.value}>
+                        {o.label}
+                      </option>
+                    ))}
+                  </optgroup>
+                )}
+                {sourceFilter !== 'paid' && organicOptions.length > 0 && (
+                  <optgroup label="Organic">
+                    {organicOptions.map((o) => (
+                      <option key={`organic-${o.value}`} value={o.value}>
+                        {o.label}
+                      </option>
+                    ))}
+                  </optgroup>
+                )}
+              </select>
+            );
+          })()}
           <DateRangePicker
             dateFrom={dateFrom}
             dateTo={dateTo}
@@ -448,8 +577,9 @@ export default function AnalyticsPage() {
             </div>
           )}
 
-          {/* Demographic & Platform Breakdowns — only when a specific campaign is selected */}
-          {selectedCampaign && (
+          {/* Demographic & Platform Breakdowns — only meaningful for paid campaigns
+              (organic posts have no Meta ad-set/ad rows to break down). */}
+          {selectedCampaign && selectedCampaignSource === 'paid' && (
             <BreakdownCharts
               campaignId={selectedCampaign}
               dateFrom={dateFrom}
@@ -457,8 +587,8 @@ export default function AnalyticsPage() {
             />
           )}
 
-          {/* Campaign Drill-Down: ad sets and ads — only when a specific campaign is selected */}
-          {selectedCampaign && (() => {
+          {/* Campaign Drill-Down: ad sets and ads — paid only. */}
+          {selectedCampaign && selectedCampaignSource === 'paid' && (() => {
             const matchedCampaign = campaigns.find(
               (c) => c.meta_campaign_id === selectedCampaign
             );

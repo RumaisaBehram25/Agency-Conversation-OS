@@ -74,9 +74,25 @@ class AdCampaignCreate(BaseModel):
     description: str | None = None
     meta_campaign_id: str | None = None
     meta_ad_set_id: str | None = None
+    source_type: str = Field("paid", pattern="^(paid|organic)$")
+    keyword: str | None = Field(None, max_length=100)
     is_attora_managed: bool = True
     product_id: uuid.UUID | None = None
     is_active: bool = True
+
+    @field_validator("keyword", mode="before")
+    @classmethod
+    def _normalize_keyword(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        normalized = str(v).strip().upper()
+        return normalized or None
+
+    @model_validator(mode="after")
+    def _validate_source_requirements(self) -> "AdCampaignCreate":
+        if self.source_type == "organic" and not self.keyword:
+            raise ValueError("organic campaigns require a keyword")
+        return self
 
 
 class AdCampaignUpdate(BaseModel):
@@ -84,9 +100,19 @@ class AdCampaignUpdate(BaseModel):
     description: str | None = None
     meta_campaign_id: str | None = None
     meta_ad_set_id: str | None = None
+    source_type: str | None = Field(None, pattern="^(paid|organic)$")
+    keyword: str | None = Field(None, max_length=100)
     is_attora_managed: bool | None = None
     product_id: uuid.UUID | None = None
     is_active: bool | None = None
+
+    @field_validator("keyword", mode="before")
+    @classmethod
+    def _normalize_keyword(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        normalized = str(v).strip().upper()
+        return normalized or None
 
 
 # ── UTM Schemas ──────────────────────────────────────────────
@@ -154,6 +180,8 @@ class AdCampaignResponse(BaseModel):
     description: str | None
     meta_campaign_id: str | None
     meta_ad_set_id: str | None
+    source_type: str
+    keyword: str | None
     is_attora_managed: bool
     product_id: uuid.UUID | None
     is_active: bool

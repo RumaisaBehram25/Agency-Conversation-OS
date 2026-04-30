@@ -7,7 +7,7 @@ and the ManyChat v2 response format.
 
 from __future__ import annotations
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 # ── ManyChat Webhook Request ──────────────────────────────────
@@ -21,6 +21,11 @@ class ManyChatCustomFields(BaseModel):
     ad_id: str | None = None
     ad_set_id: str | None = None
     campaign_id: str | None = None
+    post_id: str | None = None
+    # Comment-trigger keyword (e.g. "MUSCLE", "MACROS"). Used to resolve the
+    # lead to an organic AdCampaign when ManyChat doesn't expose post_id.
+    # Uppercased on ingest so 'muscle' and 'MUSCLE' route to the same campaign.
+    keyword: str | None = None
     # Optional first-touch UTMs (map from ManyChat / landing flow)
     utm_source: str | None = None
     utm_medium: str | None = None
@@ -29,6 +34,14 @@ class ManyChatCustomFields(BaseModel):
 
     class Config:
         extra = "allow"  # ManyChat may send additional custom fields
+
+    @field_validator("keyword", mode="before")
+    @classmethod
+    def _normalize_keyword(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        normalized = str(v).strip().upper()
+        return normalized or None
 
 
 class ManyChatSubscriber(BaseModel):

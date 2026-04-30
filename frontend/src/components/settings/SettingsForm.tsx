@@ -1,6 +1,8 @@
 import { useState, useEffect } from 'react';
 import Button from '../ui/Button';
 import Input from '../ui/Input';
+import { syncHyrosNow } from '../../api/settings';
+import type { HyrosSyncResult } from '../../api/settings';
 import type { SettingsResponse, SettingsUpdate } from '../../types';
 
 interface SettingsFormProps {
@@ -28,6 +30,28 @@ export default function SettingsForm({ settings, onSave }: SettingsFormProps) {
   const [loading, setLoading] = useState(false);
   const [toast, setToast] = useState('');
   const [error, setError] = useState('');
+  const [hyrosSyncing, setHyrosSyncing] = useState(false);
+  const [hyrosResult, setHyrosResult] = useState<HyrosSyncResult | null>(null);
+  const [hyrosError, setHyrosError] = useState('');
+
+  async function handleHyrosSync() {
+    setHyrosSyncing(true);
+    setHyrosError('');
+    setHyrosResult(null);
+    try {
+      const result = await syncHyrosNow();
+      setHyrosResult(result);
+    } catch (e: unknown) {
+      const msg =
+        e && typeof e === 'object' && 'response' in e
+          ? // @ts-expect-error axios response shape
+            e.response?.data?.detail ?? 'Hyros sync failed'
+          : 'Hyros sync failed';
+      setHyrosError(String(msg));
+    } finally {
+      setHyrosSyncing(false);
+    }
+  }
 
   useEffect(() => {
     setForm({
@@ -167,13 +191,30 @@ export default function SettingsForm({ settings, onSave }: SettingsFormProps) {
 
       {/* Hyros Section */}
       <div className="mb-8 border-t border-gray-200 pt-8">
-        <div className="mb-4 flex items-center gap-2">
-          <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-emerald-100">
-            <svg className="h-4 w-4 text-emerald-600" fill="none" viewBox="0 0 24 24" strokeWidth="1.5" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 12.75l5.159-5.159a2.25 2.25 0 013.182 0l1.409 1.409a2.25 2.25 0 003.182 0l3.909-3.909m0 0h-3.375m3.375 0v3.375M3.75 20.25h16.5" />
-            </svg>
+        <div className="mb-4 flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2">
+            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-emerald-100">
+              <svg className="h-4 w-4 text-emerald-600" fill="none" viewBox="0 0 24 24" strokeWidth="1.5" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 12.75l5.159-5.159a2.25 2.25 0 013.182 0l1.409 1.409a2.25 2.25 0 003.182 0l3.909-3.909m0 0h-3.375m3.375 0v3.375M3.75 20.25h16.5" />
+              </svg>
+            </div>
+            <h3 className="text-base font-semibold text-gray-900">Hyros</h3>
           </div>
-          <h3 className="text-base font-semibold text-gray-900">Hyros</h3>
+          <Button
+            type="button"
+            variant="secondary"
+            size="sm"
+            onClick={() => void handleHyrosSync()}
+            loading={hyrosSyncing}
+            disabled={hyrosSyncing || !settings.hyros_api_key}
+            title={
+              !settings.hyros_api_key
+                ? 'Save a Hyros API key first, then run a sync.'
+                : 'Pull the latest leads + sales from Hyros and match against your subscribers.'
+            }
+          >
+            {hyrosSyncing ? 'Syncing…' : 'Sync now'}
+          </Button>
         </div>
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           <Input
@@ -186,6 +227,37 @@ export default function SettingsForm({ settings, onSave }: SettingsFormProps) {
             className="sm:col-span-2"
           />
         </div>
+        {hyrosError && (
+          <div className="mt-3 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+            {hyrosError}
+          </div>
+        )}
+        {hyrosResult && !hyrosResult.skipped && (
+          <div className="mt-3 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800">
+            <div className="font-medium">Sync complete</div>
+            <div className="mt-1 grid grid-cols-2 gap-x-4 gap-y-0.5 text-xs sm:grid-cols-3">
+              <div>
+                Subscribers scanned: <strong>{hyrosResult.subscribers_scanned}</strong>
+              </div>
+              <div>
+                Sales scanned: <strong>{hyrosResult.sales_scanned}</strong>
+              </div>
+              <div>
+                Purchases matched: <strong>{hyrosResult.purchases_found}</strong>
+              </div>
+              <div>
+                Matched by email: <strong>{hyrosResult.matched_by_email}</strong>
+              </div>
+              <div>
+                Matched by name: <strong>{hyrosResult.matched_by_name}</strong>
+              </div>
+              <div>
+                Unmatched Hyros leads:{' '}
+                <strong>{hyrosResult.unmatched_hyros_leads}</strong>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
 
       <div className="flex justify-end border-t border-gray-200 pt-6">

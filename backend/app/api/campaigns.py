@@ -76,6 +76,11 @@ async def list_campaigns(
         None, description="Filter by Attora-managed flag"
     ),
     is_active: bool | None = Query(None, description="Filter by active flag"),
+    source_type: str | None = Query(
+        None,
+        pattern="^(paid|organic)$",
+        description="Filter by source type: 'paid' or 'organic'",
+    ),
 ) -> list[AdCampaignResponse]:
     """List ad campaigns registered for the org, with their UTM set eager-loaded."""
     query = (
@@ -88,6 +93,8 @@ async def list_campaigns(
         query = query.where(AdCampaign.is_attora_managed == is_attora_managed)
     if is_active is not None:
         query = query.where(AdCampaign.is_active == is_active)
+    if source_type is not None:
+        query = query.where(AdCampaign.source_type == source_type)
 
     result = await db.execute(query)
     return list(result.scalars().all())
@@ -117,12 +124,27 @@ async def create_campaign(
                 ),
             )
 
+    if payload.keyword:
+        existing_kw = await db.execute(
+            select(AdCampaign.id).where(
+                AdCampaign.org_id == org_id,
+                AdCampaign.keyword == payload.keyword,
+            )
+        )
+        if existing_kw.scalar_one_or_none():
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"Campaign with keyword={payload.keyword} is already registered",
+            )
+
     campaign = AdCampaign(
         org_id=org_id,
         name=payload.name,
         description=payload.description,
         meta_campaign_id=payload.meta_campaign_id,
         meta_ad_set_id=payload.meta_ad_set_id,
+        source_type=payload.source_type,
+        keyword=payload.keyword,
         is_attora_managed=payload.is_attora_managed,
         product_id=payload.product_id,
         is_active=payload.is_active,
@@ -157,8 +179,32 @@ async def update_campaign(
     campaign = await _load_campaign(db, org_id, campaign_id)
 
     updates = payload.model_dump(exclude_unset=True)
+
+    # Pre-check keyword conflict so we surface a clean 409 instead of an
+    # IntegrityError from the partial unique index.
+    if "keyword" in updates and updates["keyword"]:
+        clash = await db.execute(
+            select(AdCampaign.id).where(
+                AdCampaign.org_id == org_id,
+                AdCampaign.keyword == updates["keyword"],
+                AdCampaign.id != campaign_id,
+            )
+        )
+        if clash.scalar_one_or_none():
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"Campaign with keyword={updates['keyword']} is already registered",
+            )
+
     for key, value in updates.items():
         setattr(campaign, key, value)
+
+    # Enforce: organic campaigns must have a keyword after update.
+    if campaign.source_type == "organic" and not campaign.keyword:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="organic campaigns require a keyword",
+        )
 
     await db.commit()
     await db.refresh(campaign, attribute_names=["utm"])

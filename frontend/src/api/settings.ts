@@ -52,3 +52,21 @@ export async function getMetaSyncStatus(): Promise<MetaSyncStatus> {
   const response = await client.get<MetaSyncStatus>('/settings/meta/sync-status');
   return response.data;
 }
+
+export interface HyrosSyncResult {
+  subscribers_scanned: number;
+  sales_scanned: number;
+  matched_by_email: number;
+  matched_by_name: number;
+  matched_by_origin_lead: number;
+  total_matched: number;
+  purchases_found: number;
+  unmatched_hyros_leads: number;
+  skipped?: boolean;
+  skip_reason?: string;
+}
+
+export async function syncHyrosNow(): Promise<HyrosSyncResult> {
+  const response = await client.post<HyrosSyncResult>('/settings/hyros/sync');
+  return response.data;
+}

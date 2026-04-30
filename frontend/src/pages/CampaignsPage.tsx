@@ -9,7 +9,7 @@ import {
   updateAdCampaign,
 } from '../api/campaigns';
 import { getProducts } from '../api/products';
-import type { AdCampaign, CampaignUTM } from '../types';
+import type { AdCampaign, CampaignSourceType, CampaignUTM } from '../types';
 import LoadingSpinner from '../components/ui/LoadingSpinner';
 
 interface NewCampaignForm {
@@ -18,6 +18,8 @@ interface NewCampaignForm {
   meta_campaign_id: string;
   meta_ad_set_id: string;
   product_id: string;
+  source_type: CampaignSourceType;
+  keyword: string;
 }
 
 interface UtmForm {
@@ -32,7 +34,11 @@ const EMPTY_NEW: NewCampaignForm = {
   meta_campaign_id: '',
   meta_ad_set_id: '',
   product_id: '',
+  source_type: 'paid',
+  keyword: '',
 };
+
+type SourceFilter = 'all' | CampaignSourceType;
 
 const EMPTY_UTM: UtmForm = {
   product_page_url: '',
@@ -60,6 +66,35 @@ export default function CampaignsPage() {
   const [pageSize, setPageSize] = useState(25);
   const [currentPage, setCurrentPage] = useState(1);
   const [copiedId, setCopiedId] = useState<string | null>(null);
+  const [sourceFilter, setSourceFilter] = useState<SourceFilter>('all');
+  const [editingKeywordId, setEditingKeywordId] = useState<string | null>(null);
+  const [keywordDraft, setKeywordDraft] = useState('');
+  const [keywordSaving, setKeywordSaving] = useState(false);
+
+  async function saveKeyword(campaignId: string) {
+    const trimmed = keywordDraft.trim().toUpperCase();
+    if (!trimmed) {
+      setError('Keyword is required for organic campaigns.');
+      return;
+    }
+    setKeywordSaving(true);
+    setError('');
+    try {
+      await updateAdCampaign(campaignId, { keyword: trimmed });
+      setEditingKeywordId(null);
+      setKeywordDraft('');
+      await load();
+    } catch (e: unknown) {
+      const msg =
+        e && typeof e === 'object' && 'response' in e
+          ? // @ts-expect-error axios response shape
+            e.response?.data?.detail ?? 'Failed to update keyword'
+          : 'Failed to update keyword';
+      setError(String(msg));
+    } finally {
+      setKeywordSaving(false);
+    }
+  }
 
   function copyCampaignId(id: string) {
     void navigator.clipboard.writeText(id);
@@ -106,9 +141,14 @@ export default function CampaignsPage() {
     if (campaignsError) setError('Failed to load campaigns');
   }, [campaignsError]);
 
-  // Keep currentPage in bounds when the list shrinks (e.g., after unregister)
-  // or the user changes page size.
-  const totalPages = Math.max(1, Math.ceil(campaigns.length / pageSize));
+  const filteredCampaigns =
+    sourceFilter === 'all'
+      ? campaigns
+      : campaigns.filter((c) => c.source_type === sourceFilter);
+
+  // Keep currentPage in bounds when the list shrinks (e.g., after unregister
+  // or filter change) or the user changes page size.
+  const totalPages = Math.max(1, Math.ceil(filteredCampaigns.length / pageSize));
   useEffect(() => {
     if (currentPage > totalPages) {
       setCurrentPage(totalPages);
@@ -116,21 +156,34 @@ export default function CampaignsPage() {
   }, [currentPage, totalPages]);
 
   const pageStart = (currentPage - 1) * pageSize;
-  const pageEnd = Math.min(pageStart + pageSize, campaigns.length);
-  const paginatedCampaigns = campaigns.slice(pageStart, pageEnd);
+  const pageEnd = Math.min(pageStart + pageSize, filteredCampaigns.length);
+  const paginatedCampaigns = filteredCampaigns.slice(pageStart, pageEnd);
 
   async function handleCreate(event: React.FormEvent) {
     event.preventDefault();
     if (!newCampaign.name.trim()) return;
+    const trimmedKeyword = newCampaign.keyword.trim().toUpperCase();
+    if (newCampaign.source_type === 'organic' && !trimmedKeyword) {
+      setError('Organic campaigns require a keyword (e.g. MUSCLE).');
+      return;
+    }
     setCreating(true);
     setError('');
     try {
       await createAdCampaign({
         name: newCampaign.name.trim(),
         description: newCampaign.description.trim() || null,
-        meta_campaign_id: newCampaign.meta_campaign_id.trim() || null,
-        meta_ad_set_id: newCampaign.meta_ad_set_id.trim() || null,
+        meta_campaign_id:
+          newCampaign.source_type === 'organic'
+            ? null
+            : newCampaign.meta_campaign_id.trim() || null,
+        meta_ad_set_id:
+          newCampaign.source_type === 'organic'
+            ? null
+            : newCampaign.meta_ad_set_id.trim() || null,
         product_id: newCampaign.product_id.trim() || null,
+        source_type: newCampaign.source_type,
+        keyword: trimmedKeyword || null,
         is_attora_managed: true,
         is_active: true,
       });
@@ -289,8 +342,44 @@ export default function CampaignsPage() {
         onSubmit={handleCreate}
         className="mb-6 grid gap-3 rounded-xl border border-gray-200 bg-white p-4 md:grid-cols-2"
       >
-        <div className="md:col-span-2">
+        <div className="md:col-span-2 flex flex-wrap items-center justify-between gap-2">
           <h2 className="text-sm font-semibold text-gray-900">Register campaign</h2>
+          <div
+            role="radiogroup"
+            aria-label="Campaign source"
+            className="inline-flex overflow-hidden rounded-md border border-gray-300 bg-white text-xs font-medium"
+          >
+            <button
+              type="button"
+              role="radio"
+              aria-checked={newCampaign.source_type === 'paid'}
+              onClick={() =>
+                setNewCampaign({ ...newCampaign, source_type: 'paid' })
+              }
+              className={
+                newCampaign.source_type === 'paid'
+                  ? 'bg-blue-600 px-3 py-1.5 text-white'
+                  : 'bg-white px-3 py-1.5 text-gray-700 hover:bg-gray-50'
+              }
+            >
+              Paid Ad
+            </button>
+            <button
+              type="button"
+              role="radio"
+              aria-checked={newCampaign.source_type === 'organic'}
+              onClick={() =>
+                setNewCampaign({ ...newCampaign, source_type: 'organic' })
+              }
+              className={
+                newCampaign.source_type === 'organic'
+                  ? 'bg-emerald-600 px-3 py-1.5 text-white'
+                  : 'bg-white px-3 py-1.5 text-gray-700 hover:bg-gray-50'
+              }
+            >
+              Organic Post
+            </button>
+          </div>
         </div>
         <input
           className="rounded-md border border-gray-300 px-3 py-2 text-sm"
@@ -301,22 +390,41 @@ export default function CampaignsPage() {
           }
           required
         />
-        <input
-          className="rounded-md border border-gray-300 px-3 py-2 text-sm"
-          placeholder="Meta campaign ID"
-          value={newCampaign.meta_campaign_id}
-          onChange={(e) =>
-            setNewCampaign({ ...newCampaign, meta_campaign_id: e.target.value })
-          }
-        />
-        <input
-          className="rounded-md border border-gray-300 px-3 py-2 text-sm"
-          placeholder="Meta ad set ID (optional)"
-          value={newCampaign.meta_ad_set_id}
-          onChange={(e) =>
-            setNewCampaign({ ...newCampaign, meta_ad_set_id: e.target.value })
-          }
-        />
+        {newCampaign.source_type === 'organic' ? (
+          <input
+            className="rounded-md border border-gray-300 px-3 py-2 text-sm font-mono uppercase"
+            placeholder="Trigger keyword (e.g. MUSCLE)"
+            value={newCampaign.keyword}
+            onChange={(e) =>
+              setNewCampaign({
+                ...newCampaign,
+                keyword: e.target.value.toUpperCase(),
+              })
+            }
+            required
+            aria-label="Keyword"
+            title="The exact ManyChat trigger keyword (case-insensitive). Must be unique within the org."
+          />
+        ) : (
+          <input
+            className="rounded-md border border-gray-300 px-3 py-2 text-sm"
+            placeholder="Meta campaign ID"
+            value={newCampaign.meta_campaign_id}
+            onChange={(e) =>
+              setNewCampaign({ ...newCampaign, meta_campaign_id: e.target.value })
+            }
+          />
+        )}
+        {newCampaign.source_type === 'paid' && (
+          <input
+            className="rounded-md border border-gray-300 px-3 py-2 text-sm"
+            placeholder="Meta ad set ID (optional)"
+            value={newCampaign.meta_ad_set_id}
+            onChange={(e) =>
+              setNewCampaign({ ...newCampaign, meta_ad_set_id: e.target.value })
+            }
+          />
+        )}
         <input
           className="rounded-md border border-gray-300 px-3 py-2 text-sm"
           placeholder="Description (optional)"
@@ -351,6 +459,37 @@ export default function CampaignsPage() {
         </div>
       </form>
 
+      <div className="mb-3 flex flex-wrap items-center gap-2 text-xs">
+        <span className="text-gray-500">Show:</span>
+        {(['all', 'paid', 'organic'] as const).map((opt) => {
+          const count =
+            opt === 'all'
+              ? campaigns.length
+              : campaigns.filter((c) => c.source_type === opt).length;
+          const active = sourceFilter === opt;
+          return (
+            <button
+              key={opt}
+              type="button"
+              onClick={() => {
+                setSourceFilter(opt);
+                setCurrentPage(1);
+              }}
+              className={
+                active
+                  ? 'rounded-full bg-gray-900 px-3 py-1 font-medium text-white'
+                  : 'rounded-full border border-gray-300 bg-white px-3 py-1 font-medium text-gray-700 hover:bg-gray-50'
+              }
+            >
+              {opt === 'all' ? 'All' : opt === 'paid' ? 'Paid' : 'Organic'}
+              <span className={active ? 'ml-1.5 text-gray-300' : 'ml-1.5 text-gray-400'}>
+                {count}
+              </span>
+            </button>
+          );
+        })}
+      </div>
+
       {loading ? (
         <LoadingSpinner className="mt-12" />
       ) : (
@@ -359,9 +498,10 @@ export default function CampaignsPage() {
             <thead className="bg-gray-50">
               <tr className="text-left text-gray-600">
                 <th className="px-4 py-3 font-medium">Campaign</th>
+                <th className="px-4 py-3 font-medium">Source</th>
                 <th className="px-4 py-3 font-medium">Attora ID</th>
                 <th className="px-4 py-3 font-medium">Product</th>
-                <th className="px-4 py-3 font-medium">Meta ID</th>
+                <th className="px-4 py-3 font-medium">Meta ID / Keyword</th>
                 <th className="px-4 py-3 font-medium">Managed</th>
                 <th className="px-4 py-3 font-medium">UTM set</th>
                 <th className="min-w-[11rem] whitespace-nowrap px-4 py-3 text-right font-medium">
@@ -370,10 +510,12 @@ export default function CampaignsPage() {
               </tr>
             </thead>
             <tbody>
-              {campaigns.length === 0 ? (
+              {filteredCampaigns.length === 0 ? (
                 <tr>
-                  <td className="px-4 py-6 text-gray-500" colSpan={7}>
-                    No campaigns registered.
+                  <td className="px-4 py-6 text-gray-500" colSpan={8}>
+                    {sourceFilter === 'all'
+                      ? 'No campaigns registered.'
+                      : `No ${sourceFilter} campaigns.`}
                   </td>
                 </tr>
               ) : (
@@ -384,6 +526,17 @@ export default function CampaignsPage() {
                       {c.description && (
                         <div className="text-xs text-gray-500">{c.description}</div>
                       )}
+                    </td>
+                    <td className="px-4 py-3">
+                      <span
+                        className={
+                          c.source_type === 'organic'
+                            ? 'rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-800'
+                            : 'rounded-full bg-blue-100 px-2 py-0.5 text-xs font-medium text-blue-800'
+                        }
+                      >
+                        {c.source_type === 'organic' ? 'Organic' : 'Paid'}
+                      </span>
                     </td>
                     <td className="px-4 py-3">
                       <button
@@ -411,7 +564,67 @@ export default function CampaignsPage() {
                       </select>
                     </td>
                     <td className="px-4 py-3 font-mono text-xs text-gray-700">
-                      {c.meta_campaign_id ?? '-'}
+                      {c.source_type === 'organic' ? (
+                        editingKeywordId === c.id ? (
+                          <div className="flex items-center gap-1">
+                            <input
+                              autoFocus
+                              type="text"
+                              value={keywordDraft}
+                              onChange={(e) =>
+                                setKeywordDraft(e.target.value.toUpperCase())
+                              }
+                              onKeyDown={(e) => {
+                                if (e.key === 'Enter') void saveKeyword(c.id);
+                                if (e.key === 'Escape') {
+                                  setEditingKeywordId(null);
+                                  setKeywordDraft('');
+                                }
+                              }}
+                              disabled={keywordSaving}
+                              placeholder="MUSCLE"
+                              className="w-24 rounded-md border border-gray-300 bg-white px-2 py-1 font-mono text-xs uppercase focus:border-emerald-400 focus:outline-none focus:ring-1 focus:ring-emerald-300"
+                            />
+                            <button
+                              type="button"
+                              onClick={() => void saveKeyword(c.id)}
+                              disabled={keywordSaving}
+                              className="rounded-md border border-emerald-300 bg-emerald-50 px-2 py-1 text-xs font-medium text-emerald-700 hover:bg-emerald-100 disabled:opacity-60"
+                            >
+                              {keywordSaving ? '…' : 'Save'}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setEditingKeywordId(null);
+                                setKeywordDraft('');
+                              }}
+                              disabled={keywordSaving}
+                              className="rounded-md border border-gray-200 px-2 py-1 text-xs text-gray-600 hover:bg-gray-50"
+                            >
+                              ✕
+                            </button>
+                          </div>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setEditingKeywordId(c.id);
+                              setKeywordDraft(c.keyword ?? '');
+                            }}
+                            className={
+                              c.keyword
+                                ? 'rounded-md border border-gray-200 bg-emerald-50 px-2 py-1 font-mono text-xs text-emerald-800 hover:border-emerald-400'
+                                : 'rounded-md border border-dashed border-amber-300 bg-amber-50 px-2 py-1 text-xs font-medium text-amber-800 hover:border-amber-500'
+                            }
+                            title={c.keyword ? 'Click to edit keyword' : 'Click to add keyword'}
+                          >
+                            {c.keyword ?? '+ Add keyword'}
+                          </button>
+                        )
+                      ) : (
+                        c.meta_campaign_id ?? '-'
+                      )}
                     </td>
                     <td className="px-4 py-3">
                       <span
@@ -492,7 +705,7 @@ export default function CampaignsPage() {
             </tbody>
           </table>
 
-          {campaigns.length > 0 && (
+          {filteredCampaigns.length > 0 && (
             <div className="flex flex-wrap items-center justify-between gap-3 border-t border-gray-100 bg-gray-50 px-4 py-3 text-sm text-gray-700">
               <div className="flex items-center gap-2">
                 <span>Rows per page:</span>
@@ -514,7 +727,7 @@ export default function CampaignsPage() {
               <div className="text-xs text-gray-600">
                 Showing <span className="font-medium">{pageStart + 1}</span>–
                 <span className="font-medium">{pageEnd}</span> of{' '}
-                <span className="font-medium">{campaigns.length}</span>
+                <span className="font-medium">{filteredCampaigns.length}</span>
               </div>
 
               <div className="flex items-center gap-1">

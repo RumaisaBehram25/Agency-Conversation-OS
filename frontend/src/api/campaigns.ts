@@ -6,6 +6,7 @@ import type {
   AdSetSummary,
   AdSummary,
   BreakdownItem,
+  CampaignSourceType,
   CampaignSummary,
   CampaignUTM,
   UTMGenerateRequest,
@@ -14,12 +15,17 @@ import type {
 // ─── Attora-managed Ad Campaigns (CRUD + UTM) ───────────────────────────────
 
 export async function listAdCampaigns(
-  params: { is_attora_managed?: boolean; is_active?: boolean } = {}
+  params: {
+    is_attora_managed?: boolean;
+    is_active?: boolean;
+    source_type?: CampaignSourceType;
+  } = {}
 ): Promise<AdCampaign[]> {
   const qs = new URLSearchParams();
   if (params.is_attora_managed !== undefined)
     qs.set('is_attora_managed', String(params.is_attora_managed));
   if (params.is_active !== undefined) qs.set('is_active', String(params.is_active));
+  if (params.source_type !== undefined) qs.set('source_type', params.source_type);
 
   const suffix = qs.toString() ? `?${qs.toString()}` : '';
   const response = await client.get<AdCampaign[]>(`/campaigns${suffix}`);

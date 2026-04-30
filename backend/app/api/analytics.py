@@ -43,6 +43,21 @@ async def analytics_overview(
     date_to: date = Query(default_factory=date.today),
     channel: str | None = Query(None),
     campaign_id: str | None = Query(None),
+    attora_campaign_id: uuid.UUID | None = Query(
+        None,
+        description=(
+            "Scope to a specific organic Attora campaign (UUID). Mutually "
+            "exclusive with campaign_id; ad spend is forced to $0."
+        ),
+    ),
+    source_type: str | None = Query(
+        None,
+        pattern="^(paid|organic)$",
+        description=(
+            "Aggregate-scope to all campaigns of this source type. Ignored "
+            "when campaign_id or attora_campaign_id is also set."
+        ),
+    ),
 ) -> AnalyticsResponse:
     """
     Get aggregated analytics metrics for a date range.
@@ -52,7 +67,9 @@ async def analytics_overview(
     CPQC is scoped to that campaign plus organic (no-attribution)
     qualifications, with organic counted at $0 spend.
     """
-    return await get_analytics(db, org_id, date_from, date_to, channel, campaign_id)
+    return await get_analytics(
+        db, org_id, date_from, date_to, channel, campaign_id, attora_campaign_id, source_type
+    )
 
 
 @router.get("/roi", response_model=ROIResponse)
@@ -63,6 +80,21 @@ async def analytics_roi(
     date_from: date = Query(default_factory=lambda: date.today() - timedelta(days=30)),
     date_to: date = Query(default_factory=date.today),
     campaign_id: str | None = Query(None),
+    attora_campaign_id: uuid.UUID | None = Query(
+        None,
+        description=(
+            "Scope to a specific organic Attora campaign (UUID). Mutually "
+            "exclusive with campaign_id; ad spend is forced to $0."
+        ),
+    ),
+    source_type: str | None = Query(
+        None,
+        pattern="^(paid|organic)$",
+        description=(
+            "Aggregate-scope to all campaigns of this source type. Ignored "
+            "when campaign_id or attora_campaign_id is also set."
+        ),
+    ),
 ) -> ROIResponse:
     """
     Get ROI / money metrics.
@@ -72,7 +104,9 @@ async def analytics_roi(
     campaign_metrics rows and conversions/revenue/qualified are scoped
     to that campaign plus organic — same semantic as the CPQC card.
     """
-    return await get_roi(db, org_id, date_from, date_to, campaign_id)
+    return await get_roi(
+        db, org_id, date_from, date_to, campaign_id, attora_campaign_id, source_type
+    )
 
 
 @router.get("/ai-performance", response_model=AIPerformanceResponse)

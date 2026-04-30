@@ -228,6 +228,8 @@ export interface CampaignUTM {
   updated_at: string;
 }
 
+export type CampaignSourceType = 'paid' | 'organic';
+
 export interface AdCampaign {
   id: string;
   org_id: string;
@@ -235,6 +237,8 @@ export interface AdCampaign {
   description: string | null;
   meta_campaign_id: string | null;
   meta_ad_set_id: string | null;
+  source_type: CampaignSourceType;
+  keyword: string | null;
   is_attora_managed: boolean;
   product_id: string | null;
   is_active: boolean;
@@ -248,6 +252,8 @@ export interface AdCampaignCreate {
   description?: string | null;
   meta_campaign_id?: string | null;
   meta_ad_set_id?: string | null;
+  source_type?: CampaignSourceType;
+  keyword?: string | null;
   is_attora_managed?: boolean;
   product_id?: string | null;
   is_active?: boolean;
@@ -258,6 +264,8 @@ export interface AdCampaignUpdate {
   description?: string | null;
   meta_campaign_id?: string | null;
   meta_ad_set_id?: string | null;
+  source_type?: CampaignSourceType;
+  keyword?: string | null;
   is_attora_managed?: boolean;
   product_id?: string | null;
   is_active?: boolean;

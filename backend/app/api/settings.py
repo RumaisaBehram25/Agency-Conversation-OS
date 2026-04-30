@@ -1,10 +1,12 @@
 """
 Attora — Settings API Routes
 
-GET  /api/settings  — Get org settings (sensitive fields masked)
-PUT  /api/settings  — Update org settings (encrypts sensitive fields)
+GET  /api/settings              — Get org settings (sensitive fields masked)
+PUT  /api/settings              — Update org settings (encrypts sensitive fields)
+POST /api/settings/hyros/sync   — Manual Hyros pull for the current org
 """
 
+import logging
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -12,12 +14,15 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
+from app.jobs.hyros_sync import sync_hyros_for_org_id
 from app.models.organization import Organization
 from app.models.user import OrgUser, User
 from app.models.base import UserRole
 from app.schemas.settings import SettingsResponse, SettingsUpdate
 from app.security.encryption import decrypt_value, encrypt_value, mask_value
 from app.api.deps import get_current_user, get_org_id
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -143,3 +148,58 @@ async def update_settings(
     await db.refresh(org)
 
     return _org_to_settings_response(org)
+
+
+@router.post("/hyros/sync")
+async def hyros_sync_now(
+    current_user: User = Depends(get_current_user),
+    org_id: uuid.UUID = Depends(get_org_id),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """
+    Manually trigger a Hyros pull for the current org.
+
+    Owner/admin only. Synchronous — for orgs with thousands of subscribers
+    this can take a few seconds. Returns the same counts the cron returns
+    so the UI can show what was matched.
+    """
+    membership_result = await db.execute(
+        select(OrgUser)
+        .where(OrgUser.user_id == current_user.id)
+        .where(OrgUser.org_id == org_id)
+    )
+    membership = membership_result.scalar_one_or_none()
+    if membership is None or membership.role not in (UserRole.OWNER, UserRole.ADMIN):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Insufficient permissions. Requires owner or admin role.",
+        )
+
+    try:
+        result = await sync_hyros_for_org_id(db, org_id)
+    except Exception as exc:
+        logger.exception("Manual Hyros sync failed for org=%s", org_id)
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Hyros sync failed: {exc}",
+        )
+
+    if result.get("skipped"):
+        reason = result.get("skip_reason")
+        if reason == "no_api_key":
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="No Hyros API key configured for this organization.",
+            )
+        if reason == "decrypt_failed":
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Stored Hyros API key could not be decrypted.",
+            )
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Hyros sync skipped: {reason or 'unknown'}",
+        )
+
+    await db.commit()
+    return result

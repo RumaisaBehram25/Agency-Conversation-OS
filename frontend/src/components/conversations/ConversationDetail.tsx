@@ -8,6 +8,34 @@ interface ConversationDetailProps {
   conversation: ConversationDetailType;
 }
 
+/**
+ * Guard against displaying ManyChat unreplaced template placeholders.
+ * Returns fallback if value is a placeholder like {{first_name}}.
+ */
+function safeField(value: string | null | undefined, fallback = "—"): string {
+  if (!value) return fallback;
+  const trimmed = value.trim();
+  if (trimmed.startsWith("{{") && trimmed.endsWith("}}")) {
+    return fallback;
+  }
+  return trimmed;
+}
+
+function displayName(subscriber?: { first_name?: string | null; last_name?: string | null }): string {
+  if (!subscriber) return 'Unknown Subscriber';
+  const firstName = safeField(subscriber.first_name, "");
+  const lastName = safeField(subscriber.last_name, "");
+  const parts = [firstName, lastName].filter(Boolean);
+  return parts.length > 0 ? parts.join(' ') : 'Unknown Subscriber';
+}
+
+function displayInitial(subscriber?: { first_name?: string | null; last_name?: string | null }): string {
+  if (!subscriber) return '?';
+  const firstName = safeField(subscriber.first_name, "");
+  const lastName = safeField(subscriber.last_name, "");
+  return firstName?.charAt(0)?.toUpperCase() || lastName?.charAt(0)?.toUpperCase() || '?';
+}
+
 export default function ConversationDetailView({ conversation }: ConversationDetailProps) {
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
@@ -23,11 +51,11 @@ export default function ConversationDetailView({ conversation }: ConversationDet
         <div className="flex items-center justify-between border-b border-gray-200 bg-white px-6 py-4 rounded-t-xl">
           <div className="flex items-center gap-3">
             <div className="flex h-10 w-10 items-center justify-center rounded-full bg-primary-100 text-sm font-bold text-primary-700">
-              {(conversation.subscriber?.first_name?.charAt(0) || conversation.subscriber_name?.charAt(0) || '?').toUpperCase()}
+              {displayInitial(conversation.subscriber)}
             </div>
             <div>
               <h3 className="text-sm font-semibold text-gray-900">
-                {[conversation.subscriber?.first_name, conversation.subscriber?.last_name].filter(Boolean).join(' ') || 'Unknown Subscriber'}
+                {displayName(conversation.subscriber)}
               </h3>
               <div className="flex items-center gap-2 mt-0.5">
                 <Badge color={channelBadgeColor(conversation.channel)}>
@@ -72,7 +100,7 @@ export default function ConversationDetailView({ conversation }: ConversationDet
             <div>
               <dt className="text-xs text-gray-500">Name</dt>
               <dd className="text-sm font-medium text-gray-900">
-                {[conversation.subscriber?.first_name, conversation.subscriber?.last_name].filter(Boolean).join(' ') || 'Unknown Subscriber'}
+                {displayName(conversation.subscriber)}
               </dd>
             </div>
             <div>

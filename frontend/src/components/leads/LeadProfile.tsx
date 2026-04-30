@@ -7,13 +7,30 @@ interface LeadProfileProps {
   lead: SubscriberDetail;
 }
 
+/**
+ * Guard against displaying ManyChat unreplaced template placeholders.
+ * Returns fallback if value is a placeholder like {{first_name}}.
+ */
+function safeField(value: string | null | undefined, fallback = "—"): string {
+  if (!value) return fallback;
+  const trimmed = value.trim();
+  if (trimmed.startsWith("{{") && trimmed.endsWith("}}")) {
+    return fallback;
+  }
+  return trimmed;
+}
+
 function displayName(lead: SubscriberDetail): string {
-  const parts = [lead.first_name, lead.last_name].filter(Boolean);
+  const firstName = safeField(lead.first_name, "");
+  const lastName = safeField(lead.last_name, "");
+  const parts = [firstName, lastName].filter(Boolean);
   return parts.length > 0 ? parts.join(' ') : 'Unknown';
 }
 
 function displayInitial(lead: SubscriberDetail): string {
-  return lead.first_name?.charAt(0)?.toUpperCase() || lead.last_name?.charAt(0)?.toUpperCase() || '?';
+  const firstName = safeField(lead.first_name, "");
+  const lastName = safeField(lead.last_name, "");
+  return firstName?.charAt(0)?.toUpperCase() || lastName?.charAt(0)?.toUpperCase() || '?';
 }
 
 function hasIntakeUtm(lead: SubscriberDetail): boolean {
@@ -72,18 +89,18 @@ export default function LeadProfile({ lead }: LeadProfileProps) {
               <dt className="text-xs text-gray-500">Last Contact</dt>
               <dd className="text-sm text-gray-700">{lead.last_message_at ? formatDate(lead.last_message_at) : '—'}</dd>
             </div>
-            {lead.email && (
-              <div>
-                <dt className="text-xs text-gray-500">Email</dt>
-                <dd className="text-sm text-gray-700">{lead.email}</dd>
-              </div>
-            )}
-            {lead.phone && (
-              <div>
-                <dt className="text-xs text-gray-500">Phone</dt>
-                <dd className="text-sm text-gray-700">{lead.phone}</dd>
-              </div>
-            )}
+            <div>
+              <dt className="text-xs text-gray-500">Email</dt>
+              <dd className={`text-sm ${lead.email ? 'text-gray-700' : 'text-gray-400 italic'}`}>
+                {safeField(lead.email, "No email")}
+              </dd>
+            </div>
+            <div>
+              <dt className="text-xs text-gray-500">Phone</dt>
+              <dd className={`text-sm ${lead.phone ? 'text-gray-700' : 'text-gray-400 italic'}`}>
+                {safeField(lead.phone, "No phone")}
+              </dd>
+            </div>
           </dl>
         </div>
 

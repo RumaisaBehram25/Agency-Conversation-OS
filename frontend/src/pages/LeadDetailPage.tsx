@@ -5,6 +5,26 @@ import LeadProfile from '../components/leads/LeadProfile';
 import LoadingSpinner from '../components/ui/LoadingSpinner';
 import Button from '../components/ui/Button';
 
+/**
+ * Guard against displaying ManyChat unreplaced template placeholders.
+ * Returns fallback if value is a placeholder like {{first_name}}.
+ */
+function safeField(value: string | null | undefined, fallback = "—"): string {
+  if (!value) return fallback;
+  const trimmed = value.trim();
+  if (trimmed.startsWith("{{") && trimmed.endsWith("}}")) {
+    return fallback;
+  }
+  return trimmed;
+}
+
+function getPageTitle(lead: { first_name?: string | null; last_name?: string | null }): string {
+  const firstName = safeField(lead.first_name, "");
+  const lastName = safeField(lead.last_name, "");
+  const parts = [firstName, lastName].filter(Boolean);
+  return parts.length > 0 ? parts.join(' ') : 'Unknown Subscriber';
+}
+
 export default function LeadDetailPage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
@@ -47,7 +67,7 @@ export default function LeadDetailPage() {
       </button>
 
       <div className="mb-6">
-        <h1 className="text-2xl font-bold text-gray-900">{[lead.first_name, lead.last_name].filter(Boolean).join(' ') || 'Unknown Subscriber'}</h1>
+        <h1 className="text-2xl font-bold text-gray-900">{getPageTitle(lead)}</h1>
         <p className="mt-1 text-sm text-gray-500">Lead profile and conversation history</p>
       </div>
 

@@ -10,12 +10,30 @@ interface LeadListProps {
   onDeleted?: () => void;
 }
 
+/**
+ * Guard against displaying ManyChat unreplaced template placeholders.
+ * Returns fallback if value is a placeholder like {{first_name}}.
+ */
+function safeField(value: string | null | undefined, fallback = "—"): string {
+  if (!value) return fallback;
+  const trimmed = value.trim();
+  if (trimmed.startsWith("{{") && trimmed.endsWith("}}")) {
+    return fallback;
+  }
+  return trimmed;
+}
+
 function displayName(lead: SubscriberListItem): string {
-  return [lead.first_name, lead.last_name].filter(Boolean).join(' ') || 'Unknown Subscriber';
+  const firstName = safeField(lead.first_name, "");
+  const lastName = safeField(lead.last_name, "");
+  const parts = [firstName, lastName].filter(Boolean);
+  return parts.length > 0 ? parts.join(' ') : 'Unknown Subscriber';
 }
 
 function displayInitial(lead: SubscriberListItem): string {
-  return lead.first_name?.charAt(0)?.toUpperCase() || lead.last_name?.charAt(0)?.toUpperCase() || '?';
+  const firstName = safeField(lead.first_name, "");
+  const lastName = safeField(lead.last_name, "");
+  return firstName?.charAt(0)?.toUpperCase() || lastName?.charAt(0)?.toUpperCase() || '?';
 }
 
 function hyrosStatus(lead: SubscriberListItem): string {
@@ -44,8 +62,7 @@ export default function LeadList({ leads, onDeleted }: LeadListProps) {
 
   async function handleDelete(event: React.MouseEvent, lead: SubscriberListItem) {
     event.stopPropagation();
-    const name =
-      [lead.first_name, lead.last_name].filter(Boolean).join(' ') || 'this lead';
+    const name = displayName(lead);
     if (!confirm(`Delete ${name}? This removes all their conversations, messages, and conversion history. This cannot be undone.`))
       return;
     setDeletingId(lead.id);

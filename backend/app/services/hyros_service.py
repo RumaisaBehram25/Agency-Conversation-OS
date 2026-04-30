@@ -429,6 +429,20 @@ async def sync_single_subscriber_hyros_purchase(
         subscriber.hyros_synced_at = now
         return False
 
+    # Email is required for reliable Hyros matching.  Without it we can only
+    # fall back to name matching which is unreliable and frequently wrong.
+    # Log a clear warning so ops can investigate missing email capture.
+    if not subscriber.email:
+        logger.warning(
+            "Hyros sync skipped for subscriber=%s (org=%s): no email on record — "
+            "Hyros cannot match this lead without an email address",
+            subscriber.manychat_subscriber_id,
+            org_id,
+        )
+        subscriber.hyros_synced_at = now
+        await db.commit()
+        return False
+
     leads = await service.fetch_leads(api_key, org=org)
     match = match_lead(
         leads,

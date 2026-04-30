@@ -14,6 +14,7 @@ import asyncio
 import logging
 import time
 import uuid
+import json
 
 from fastapi import APIRouter, Depends, Header, HTTPException, status
 from sqlalchemy import select
@@ -136,6 +137,35 @@ async def manychat_webhook(
 
     Total time budget: 10 seconds (with 500ms buffer).
     """
+    # Diagnostic: log raw incoming payload early to diagnose missing workflows
+    try:
+        payload = request.model_dump(exclude_none=False)
+        logger.info("[WEBHOOK] Received payload: %s", json.dumps(payload, indent=2))
+    except Exception:
+        logger.exception("[WEBHOOK] Failed to serialize webhook payload")
+
+    logger.info(
+        "[WEBHOOK] channel=%s flow_id=%s subscriber_id=%s",
+        request.channel,
+        request.flow_id,
+        getattr(request.subscriber, "id", None),
+    )
+
+    # If ManyChat provided an attora_campaign_id in top-level fields or custom_fields,
+    # log it and attempt a diagnostic lookup in the DB (non-fatal)
+    try:
+        # custom_fields extraction happens below; peek at top-level subscriber fields too
+        top_attora = None
+        try:
+            top_attora = (request.subscriber.custom_fields or {}).get("attora_campaign_id") if request.subscriber and getattr(request.subscriber, 'custom_fields', None) else None
+        except Exception:
+            top_attora = None
+        # We'll inspect again after building custom_fields, but log this quick snapshot now
+        if top_attora:
+            logger.info("[WEBHOOK] attora_campaign_id (top-level) received: %s", top_attora)
+    except Exception:
+        logger.exception("[WEBHOOK] Error while inspecting attora_campaign_id")
+
     start_time = time.monotonic()
 
     subscriber_id = request.subscriber.id
@@ -161,6 +191,28 @@ async def manychat_webhook(
         custom_fields["phone"] = request.subscriber.phone
     if request.subscriber.email:
         custom_fields["email"] = request.subscriber.email
+
+    # Diagnostic: log attora_campaign_id from custom_fields and attempt DB lookup
+    try:
+        attora_campaign_id = custom_fields.get("attora_campaign_id")
+        logger.info("[WEBHOOK] attora_campaign_id received: %s", attora_campaign_id)
+        if attora_campaign_id:
+            try:
+                camp_uuid = uuid.UUID(attora_campaign_id)
+            except Exception:
+                camp_uuid = None
+            if camp_uuid:
+                try:
+                    from sqlalchemy import select
+                    from app.models.campaign import AdCampaign
+
+                    result = await db.execute(select(AdCampaign).where(AdCampaign.id == camp_uuid))
+                    campaign = result.scalar_one_or_none()
+                    logger.info("[WEBHOOK] campaign lookup result: %s", getattr(campaign, "name", None) if campaign else None)
+                except Exception:
+                    logger.exception("[WEBHOOK] campaign lookup failed for id: %s", attora_campaign_id)
+    except Exception:
+        logger.exception("[WEBHOOK] Error while logging attora_campaign_id")
 
     # Log attribution fields so we can trace organic vs paid and debug 14-vs-8 gaps.
     _post_id  = custom_fields.get("post_id")  or "(none)"

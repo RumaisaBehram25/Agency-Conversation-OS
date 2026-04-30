@@ -397,13 +397,16 @@ async def _get_or_create_subscriber(
         if direct_attora_id and subscriber.attora_campaign_id is None:
             try:
                 subscriber.attora_campaign_id = uuid.UUID(direct_attora_id)
+                logger.info("[CTX] Set subscriber.attora_campaign_id from webhook: %s -> %s", manychat_subscriber_id, subscriber.attora_campaign_id)
             except (ValueError, TypeError):
-                pass
+                logger.warning("[CTX] Invalid attora_campaign_id received from webhook: %s (subscriber=%s)", direct_attora_id, manychat_subscriber_id)
         # Compliance: link subscriber to registered Attora campaign (or warn)
         if subscriber.campaign_id and subscriber.attora_campaign_id is None:
-            subscriber.attora_campaign_id = await _resolve_attora_campaign_id(
+            resolved = await _resolve_attora_campaign_id(
                 db, org_id, subscriber.campaign_id, manychat_subscriber_id
             )
+            subscriber.attora_campaign_id = resolved
+            logger.info("[CTX] Resolved attora_campaign_id from campaign_id: subscriber=%s campaign_id=%s resolved=%s", manychat_subscriber_id, subscriber.campaign_id, resolved)
         # Organic-post attribution: re-resolve from the ManyChat trigger
         # keyword on EVERY webhook that carries one. ManyChat only sets
         # `keyword` on the comment-trigger webhook (not on follow-up message

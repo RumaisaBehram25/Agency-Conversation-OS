@@ -8,7 +8,7 @@ compliance rules, and conversation playbooks. One config per org (unique).
 import uuid
 
 from sqlalchemy import Integer, Text, UniqueConstraint, Uuid
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.dialects.postgresql import JSONB  # still used for objection_handlers
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base, OrgScopedMixin, TimestampMixin
@@ -33,7 +33,7 @@ class AIConfig(Base, TimestampMixin, OrgScopedMixin):
     system_prompt_override: Mapped[str | None] = mapped_column(Text, nullable=True)
     product_knowledge: Mapped[str | None] = mapped_column(Text, nullable=True)
     compliance_rules: Mapped[str | None] = mapped_column(Text, nullable=True)
-    conversion_playbook: Mapped[list | None] = mapped_column(JSONB, nullable=True)
+    conversion_playbook: Mapped[str | None] = mapped_column(Text, nullable=True)
     objection_handlers: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     greeting_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     fallback_message: Mapped[str | None] = mapped_column(Text, nullable=True)

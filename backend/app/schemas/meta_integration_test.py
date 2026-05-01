@@ -72,6 +72,10 @@ class MetaSyncNowRequest(BaseModel):
             "platform breakdowns (slower but needed for drilldowns)."
         ),
     )
+    source_type: str | None = Field(
+        None,
+        description="Limit granular sync to campaigns of this source type: 'paid' or 'organic'. Omit to sync all.",
+    )
 
 
 class MetaSyncNowResponse(BaseModel):

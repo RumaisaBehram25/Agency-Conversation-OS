@@ -77,6 +77,7 @@ async def generate_response(
         subscriber_id=context.subscriber.subscriber_id,
         attora_id=context.subscriber.attora_id,
         campaign_product_id=context.campaign_product_id,
+        attora_campaign_id=context.subscriber.attora_campaign_id,
     )
     user_message = build_user_message(context)
 

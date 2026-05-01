@@ -79,11 +79,12 @@ export async function getCampaignUtmForSubscriber(
 // ─── Campaign Metrics (Meta drill-down) ─────────────────────────────────────
 
 export async function getCampaigns(
-  params: { date_from?: string; date_to?: string } = {}
+  params: { date_from?: string; date_to?: string; source_type?: string } = {}
 ): Promise<CampaignSummary[]> {
   const qs = new URLSearchParams();
   if (params.date_from) qs.set('date_from', params.date_from);
   if (params.date_to) qs.set('date_to', params.date_to);
+  if (params.source_type) qs.set('source_type', params.source_type);
 
   const response = await client.get<CampaignSummary[]>(
     `/campaign-metrics?${qs.toString()}`

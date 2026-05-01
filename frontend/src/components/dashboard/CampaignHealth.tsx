@@ -6,19 +6,19 @@ interface CampaignHealthProps {
 
 function statusLight(status: string) {
   switch (status) {
-    case 'healthy':
+    case 'green':
       return (
         <span className="flex h-3 w-3 rounded-full bg-green-500" title="Healthy">
           <span className="inline-flex h-full w-full animate-ping rounded-full bg-green-400 opacity-50" />
         </span>
       );
-    case 'warning':
+    case 'yellow':
       return (
         <span className="flex h-3 w-3 rounded-full bg-yellow-500" title="Warning" />
       );
-    case 'critical':
+    case 'red':
       return (
-        <span className="flex h-3 w-3 rounded-full bg-red-500" title="Critical">
+        <span className="flex h-3 w-3 rounded-full bg-red-500" title="Needs attention">
           <span className="inline-flex h-full w-full animate-ping rounded-full bg-red-400 opacity-75" />
         </span>
       );
@@ -29,9 +29,14 @@ function statusLight(status: string) {
 
 function statusLabel(status: string) {
   const classes: Record<string, string> = {
-    healthy: 'text-green-700 bg-green-50',
-    warning: 'text-yellow-700 bg-yellow-50',
-    critical: 'text-red-700 bg-red-50',
+    green: 'text-green-700 bg-green-50',
+    yellow: 'text-yellow-700 bg-yellow-50',
+    red: 'text-red-700 bg-red-50',
+  };
+  const labels: Record<string, string> = {
+    green: 'Healthy',
+    yellow: 'Warning',
+    red: 'Critical',
   };
   return (
     <span
@@ -39,7 +44,7 @@ function statusLabel(status: string) {
         classes[status] || 'text-gray-700 bg-gray-50'
       }`}
     >
-      {status.charAt(0).toUpperCase() + status.slice(1)}
+      {labels[status] || status.charAt(0).toUpperCase() + status.slice(1)}
     </span>
   );
 }
@@ -67,11 +72,11 @@ export default function CampaignHealth({ campaigns }: CampaignHealthProps) {
               {statusLight(campaign.status)}
               <div>
                 <p className="text-sm font-medium text-gray-900">
-                  {campaign.campaign_name}
+                  {campaign.name}
                 </p>
-                <p className="text-xs text-gray-500">
-                  {campaign.metric}: {typeof campaign.value === 'number' ? campaign.value.toFixed(2) : campaign.value}
-                </p>
+                {campaign.reason && (
+                  <p className="text-xs text-gray-500">{campaign.reason}</p>
+                )}
               </div>
             </div>
             {statusLabel(campaign.status)}

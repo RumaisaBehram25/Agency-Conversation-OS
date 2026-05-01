@@ -6,7 +6,6 @@ interface AnalyticsMetricCardsProps {
   avgResponseTimeMs: number | null;
   qualificationRate: number | null;
   hyrosConfirmedPurchases?: number;
-  cpqcIncludesOrganic?: boolean;
 }
 
 interface MetricItem {
@@ -22,7 +21,6 @@ export default function AnalyticsMetricCards({
   avgResponseTimeMs,
   qualificationRate,
   hyrosConfirmedPurchases = 0,
-  cpqcIncludesOrganic = false,
 }: AnalyticsMetricCardsProps) {
   const metrics: MetricItem[] = [
     {
@@ -34,9 +32,7 @@ export default function AnalyticsMetricCards({
     {
       label: 'CPQC',
       value: cpqc != null ? formatCurrency(cpqc) : '—',
-      description: cpqcIncludesOrganic
-        ? 'Cost Per Qualified Conversation (incl. organic at $0)'
-        : 'Cost Per Qualified Conversation',
+      description: 'Cost Per Qualified Conversation',
       color: cpqc != null ? (cpqc <= 5 ? 'border-green-200 bg-green-50' : cpqc <= 15 ? 'border-yellow-200 bg-yellow-50' : 'border-red-200 bg-red-50') : 'border-gray-200 bg-gray-50',
     },
     {

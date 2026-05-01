@@ -54,6 +54,7 @@ async def list_campaigns(
     db: AsyncSession = Depends(get_db),
     date_from: date = Query(default_factory=_default_date_from),
     date_to: date = Query(default_factory=_default_date_to),
+    source_type: str | None = Query(None, pattern="^(paid|organic)$"),
 ) -> list[CampaignSummary]:
     """List campaigns with aggregated metrics for the given date range.
 
@@ -73,17 +74,20 @@ async def list_campaigns(
     query = (
         select(
             AdCampaign.meta_campaign_id.label("meta_campaign_id"),
+            AdCampaign.source_type.label("source_type"),
             func.coalesce(
                 func.max(CampaignMetric.meta_campaign_name),
                 AdCampaign.name,
             ).label("meta_campaign_name"),
             func.max(CampaignMetric.status).label("status"),
+            func.max(CampaignMetric.daily_budget).label("daily_budget"),
             _coalesce_sum(CampaignMetric.spend).label("spend"),
             _coalesce_sum(CampaignMetric.impressions).label("impressions"),
             _coalesce_sum(CampaignMetric.clicks).label("clicks"),
             _coalesce_sum(CampaignMetric.leads).label("leads"),
             _coalesce_sum(CampaignMetric.link_clicks).label("link_clicks"),
             _coalesce_sum(CampaignMetric.video_views).label("video_views"),
+            _coalesce_sum(CampaignMetric.post_engagement).label("post_engagement"),
             _coalesce_avg(CampaignMetric.cpc).label("cpc"),
             _coalesce_avg(CampaignMetric.cpm).label("cpm"),
             _coalesce_avg(CampaignMetric.ctr).label("ctr"),
@@ -94,9 +98,12 @@ async def list_campaigns(
         .where(AdCampaign.is_attora_managed.is_(True))
         .where(AdCampaign.is_active.is_(True))
         .where(AdCampaign.meta_campaign_id.isnot(None))
-        .group_by(AdCampaign.meta_campaign_id, AdCampaign.name)
+        .group_by(AdCampaign.meta_campaign_id, AdCampaign.source_type, AdCampaign.name)
         .order_by(func.coalesce(func.sum(CampaignMetric.spend), 0).desc())
     )
+
+    if source_type is not None:
+        query = query.where(AdCampaign.source_type == source_type)
 
     result = await db.execute(query)
     rows = result.all()
@@ -105,13 +112,16 @@ async def list_campaigns(
         CampaignSummary(
             meta_campaign_id=row.meta_campaign_id,
             meta_campaign_name=row.meta_campaign_name,
+            source_type=row.source_type or "paid",
             status=row.status,
+            daily_budget=float(row.daily_budget) if row.daily_budget is not None else None,
             spend=float(row.spend) if row.spend else 0.0,
             impressions=int(row.impressions) if row.impressions else 0,
             clicks=int(row.clicks) if row.clicks else 0,
             leads=int(row.leads) if row.leads else 0,
             link_clicks=int(row.link_clicks) if row.link_clicks else 0,
             video_views=int(row.video_views) if row.video_views else 0,
+            post_engagement=int(row.post_engagement) if row.post_engagement else 0,
             cpc=float(row.cpc) if row.cpc is not None else None,
             cpm=float(row.cpm) if row.cpm is not None else None,
             ctr=float(row.ctr) if row.ctr is not None else None,

@@ -139,8 +139,11 @@ async def analytics_organic_keyword_stats(
     keyword: str | None = Query(None),
 ) -> OrganicKeywordStatsResponse:
     """
-    Conversation, conversion, and revenue counts for organic campaigns
-    with keyword 'MACROS' or 'MUSCLES' (case-insensitive).
+    Conversation, conversion, and revenue counts for organic campaigns.
+
+    When `keyword` is provided, results are scoped to that keyword
+    (case-insensitive). When omitted, aggregates across every active
+    Attora-managed organic campaign in the org.
     """
     stats = await get_organic_keyword_stats(db, org_id, date_from, date_to, keyword)
     return OrganicKeywordStatsResponse(**stats)

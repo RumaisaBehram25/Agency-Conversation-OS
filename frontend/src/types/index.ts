@@ -286,12 +286,15 @@ export interface CampaignSummary {
   meta_campaign_id: string;
   meta_campaign_name: string | null;
   status: string | null;
+  source_type: CampaignSourceType;
+  daily_budget: number | null;
   spend: number;
   impressions: number;
   clicks: number;
   leads: number;
   link_clicks: number;
   video_views: number;
+  post_engagement: number;
   cpc: number | null;
   cpm: number | null;
   ctr: number | null;
@@ -431,10 +434,9 @@ export interface ManyChatFlowStatsResponse {
 // ─── Dashboard ───────────────────────────────────────────────────────────────
 
 export interface CampaignHealth {
-  campaign_name: string;
-  status: 'healthy' | 'warning' | 'critical';
-  metric: string;
-  value: number;
+  name: string;
+  status: string; // green | yellow | red
+  reason: string | null;
 }
 
 export interface DashboardResponse {

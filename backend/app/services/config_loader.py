@@ -16,6 +16,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.ai_config import AIConfig
+from app.models.campaign import AdCampaign
 from app.models.organization import Organization
 from app.models.product import Product
 from app.schemas.ai_engine import AIConfigData, OrgConfig, ProductInfo
@@ -109,6 +110,19 @@ async def load_org_config(
     )
     products = products_result.scalars().all()
 
+    # Load campaign conversation scripts (only campaigns that have one set)
+    campaigns_result = await db.execute(
+        select(AdCampaign.id, AdCampaign.conversation_script)
+        .where(
+            AdCampaign.org_id == org_id,
+            AdCampaign.conversation_script.isnot(None),
+        )
+    )
+    campaign_scripts = {
+        str(row.id): row.conversation_script
+        for row in campaigns_result.all()
+    }
+
     product_list = [
         ProductInfo(
             id=str(p.id),
@@ -143,6 +157,7 @@ async def load_org_config(
         meta_page_id=org.meta_page_id,
         ai_config=ai_config_data,
         products=product_list,
+        campaign_scripts=campaign_scripts,
     )
 
     # ── Step 3: Cache in Redis ────────────────────────────────

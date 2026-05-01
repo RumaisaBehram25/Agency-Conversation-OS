@@ -741,6 +741,88 @@ async def fetch_ad_creatives(
 
 
 # ---------------------------------------------------------------------------
+# Ad → Campaign ID lookup
+# ---------------------------------------------------------------------------
+
+async def fetch_ad_campaign_id(
+    ad_id: str,
+    access_token: str,
+) -> tuple[str | None, str | None]:
+    """
+    Resolve a Meta Ad/AdSet ID to its parent Campaign ID.
+
+    Tries three strategies in order:
+    1. Read campaign_id directly (works for ad and adset objects).
+    2. If Meta says campaign_id doesn't exist on this object, check whether
+       the ID is already a campaign (boosted posts sometimes surface the
+       campaign ID as the "ad ID" in the Boost UI).
+    3. Try reading it as an adset to get campaign_id.
+
+    Returns (campaign_id, error_message).
+    """
+    async with httpx.AsyncClient(timeout=_DEFAULT_TIMEOUT) as client:
+        try:
+            # ── Strategy 1: ad or adset → campaign_id ─────────────────
+            r1 = await client.get(
+                f"{_GRAPH_API_BASE}/{ad_id}",
+                params={"access_token": access_token, "fields": "campaign_id"},
+            )
+            body1 = r1.json()
+
+            if r1.status_code == 200:
+                campaign_id = body1.get("campaign_id")
+                if campaign_id:
+                    return campaign_id, None
+
+            meta_err = body1.get("error", {})
+            err_code = meta_err.get("code")
+            err_msg = meta_err.get("message", "")
+
+            # ── Strategy 2: ID is already a campaign ──────────────────
+            # Error 100 "nonexisting field (campaign_id)" means the object
+            # doesn't have that field — campaigns are the top level so they
+            # have no parent campaign_id. Check if this IS a campaign.
+            if err_code == 100 and "campaign_id" in err_msg:
+                r2 = await client.get(
+                    f"{_GRAPH_API_BASE}/{ad_id}",
+                    params={"access_token": access_token, "fields": "id,name,objective"},
+                )
+                if r2.status_code == 200:
+                    data2 = r2.json()
+                    if data2.get("id") and data2.get("objective"):
+                        # This ID is already a campaign — return it directly
+                        return data2["id"], None
+
+            # ── Strategy 3: try adsets edge ───────────────────────────
+            if err_code == 100:
+                r3 = await client.get(
+                    f"{_GRAPH_API_BASE}/{ad_id}",
+                    params={"access_token": access_token, "fields": "id,campaign_id"},
+                )
+                if r3.status_code == 200:
+                    data3 = r3.json()
+                    campaign_id = data3.get("campaign_id")
+                    if campaign_id:
+                        return campaign_id, None
+
+            # ── Nothing worked — surface the clearest error ────────────
+            if r1.status_code in (401, 403):
+                return None, "Access token invalid or missing ads_read permission"
+            if r1.status_code == 404:
+                return None, f"ID {ad_id} not found — check it belongs to this ad account"
+            if err_msg:
+                return None, err_msg
+            return None, f"Could not resolve a campaign ID for {ad_id}"
+
+        except httpx.TimeoutException:
+            return None, "Meta Graph API request timed out"
+        except httpx.HTTPError as e:
+            return None, str(e)[:500]
+        except Exception as e:
+            return None, str(e)[:500]
+
+
+# ---------------------------------------------------------------------------
 # Campaign metadata (not insights — structural info)
 # ---------------------------------------------------------------------------
 

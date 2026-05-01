@@ -16,7 +16,7 @@ import logging
 import uuid
 from datetime import date, datetime, timedelta, timezone
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -24,6 +24,7 @@ from app.api.deps import get_current_user, get_org_id
 from app.database import async_session_factory, get_db
 from app.integrations.meta.marketing_api import (
     fetch_ad_account_overview,
+    fetch_ad_campaign_id,
     fetch_campaign_metadata,
     fetch_daily_ad_spend,
 )
@@ -276,10 +277,11 @@ async def _run_meta_sync_and_record(
     encrypted_token: str,
     days_back: int,
     granular: bool,
+    source_type: str | None = None,
 ) -> None:
     """Background entrypoint — runs the sync and records the result."""
     summary = await _run_meta_sync(
-        org_id, ad_account_id, encrypted_token, days_back, granular
+        org_id, ad_account_id, encrypted_token, days_back, granular, source_type
     )
     await _record_sync_finished(org_id, run_id, summary)
 
@@ -290,6 +292,7 @@ async def _run_meta_sync(
     encrypted_token: str,
     days_back: int,
     granular: bool,
+    source_type: str | None = None,
 ) -> dict:
     """
     Auto-import campaigns, then run sync_ad_spend with a fresh session
@@ -300,7 +303,9 @@ async def _run_meta_sync(
 
     async with async_session_factory() as session:
         try:
-            if granular:
+            if granular and source_type is None:
+                # Only auto-import when syncing all — skip when scoped to a
+                # specific source_type so we don't pull in unrelated campaigns.
                 try:
                     access_token = decrypt_value(encrypted_token)
                     imported = await _auto_import_meta_campaigns(
@@ -323,6 +328,7 @@ async def _run_meta_sync(
                 days_back=days_back,
                 granular=granular,
                 org_id=org_id,
+                source_type=source_type,
             )
             logger.info("sync-now completed: %s", result)
             summary.update(
@@ -424,17 +430,56 @@ async def meta_sync_now(
         org.meta_capi_token,
         body.days_back,
         body.granular,
+        body.source_type,
     )
 
+    scope = f" ({body.source_type} campaigns only)" if body.source_type else ""
     return MetaSyncNowResponse(
         started=True,
         days_back=body.days_back,
         granular=body.granular,
         message=(
-            f"Meta sync started for the last {body.days_back} day(s). "
+            f"Meta sync started for the last {body.days_back} day(s){scope}. "
             "Polling for results — this can take a few minutes."
         ),
     )
+
+
+@router.get("/meta/lookup-ad")
+async def meta_lookup_ad(
+    ad_id: str = Query(..., description="Meta Ad ID to look up"),
+    current_user: User = Depends(get_current_user),
+    org_id: uuid.UUID = Depends(get_org_id),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """
+    Resolve a Meta Ad ID to its parent Campaign ID using the org's stored token.
+    Useful for finding the campaign ID of a boosted post when you only have the ad ID.
+    """
+    result = await db.execute(select(Organization).where(Organization.id == org_id))
+    org = result.scalar_one_or_none()
+    if org is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Organization not found")
+
+    if not org.meta_capi_token:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Meta access token not configured. Set meta_capi_token in Settings first.",
+        )
+
+    try:
+        access_token = decrypt_value(org.meta_capi_token)
+    except Exception:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to decrypt Meta access token.",
+        )
+
+    campaign_id, error = await fetch_ad_campaign_id(ad_id.strip(), access_token)
+    if error:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=error)
+
+    return {"ad_id": ad_id.strip(), "campaign_id": campaign_id}
 
 
 @router.get("/meta/sync-status")

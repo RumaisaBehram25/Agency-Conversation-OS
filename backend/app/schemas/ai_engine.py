@@ -151,7 +151,7 @@ class AIConfigData(BaseModel):
     system_prompt_override: str | None = None
     product_knowledge: str | None = None
     compliance_rules: str | None = None
-    conversion_playbook: str | list | None = None
+    conversion_playbook: str | None = None
     objection_handlers: dict | None = None
     greeting_message: str | None = None
     fallback_message: str | None = None
@@ -169,6 +169,8 @@ class OrgConfig(BaseModel):
     meta_page_id: str | None = None
     ai_config: AIConfigData = Field(default_factory=AIConfigData)
     products: list[ProductInfo] = Field(default_factory=list)
+    # Maps AdCampaign.id (str UUID) → conversation_script for fast lookup in prompt builder.
+    campaign_scripts: dict[str, str] = Field(default_factory=dict)
 
 
 # ── AI Response ───────────────────────────────────────────────

@@ -187,12 +187,48 @@ async def get_analytics(
         total_revenue = float(row.total_revenue)
     avg_response_time_ms = int(row.avg_response_time_ms) if row.avg_response_time_ms else None
 
-    # CPQC numerator: org-wide ad_spend by default; campaign-scoped when
-    # campaign_id is provided. Organic flows have no spend, so an
-    # attora_campaign_id-scoped view (or a source_type='organic' aggregate)
-    # forces the numerator to $0 — that's the intended client-facing semantic.
-    if attora_campaign_id is not None or source_type == "organic":
-        total_ad_spend = 0.0
+    # CPQC numerator: look up spend from campaign_metrics for all scopes.
+    # Organic campaigns may be boosted posts with real Meta spend — query it.
+    if attora_campaign_id is not None:
+        # Specific organic campaign: resolve its meta_campaign_id then sum spend.
+        mc_result = await db.execute(
+            select(AdCampaign.meta_campaign_id).where(AdCampaign.id == attora_campaign_id)
+        )
+        linked_meta_id = mc_result.scalar()
+        if linked_meta_id:
+            spend_result = await db.execute(
+                select(func.coalesce(func.sum(CampaignMetric.spend), 0))
+                .where(
+                    CampaignMetric.org_id == org_id,
+                    CampaignMetric.level == "campaign",
+                    CampaignMetric.meta_campaign_id == linked_meta_id,
+                    CampaignMetric.date >= date_from,
+                    CampaignMetric.date <= date_to,
+                )
+            )
+            total_ad_spend = float(spend_result.scalar() or 0)
+        else:
+            total_ad_spend = 0.0
+    elif source_type == "organic":
+        # All active organic campaigns in this org — include boosted post spend.
+        organic_meta_ids = select(AdCampaign.meta_campaign_id).where(
+            AdCampaign.org_id == org_id,
+            AdCampaign.source_type == "organic",
+            AdCampaign.is_attora_managed.is_(True),
+            AdCampaign.is_active.is_(True),
+            AdCampaign.meta_campaign_id.isnot(None),
+        )
+        spend_result = await db.execute(
+            select(func.coalesce(func.sum(CampaignMetric.spend), 0))
+            .where(
+                CampaignMetric.org_id == org_id,
+                CampaignMetric.level == "campaign",
+                CampaignMetric.meta_campaign_id.in_(organic_meta_ids),
+                CampaignMetric.date >= date_from,
+                CampaignMetric.date <= date_to,
+            )
+        )
+        total_ad_spend = float(spend_result.scalar() or 0)
     elif campaign_id:
         spend_result = await db.execute(
             select(func.coalesce(func.sum(CampaignMetric.spend), 0))
@@ -250,15 +286,21 @@ async def get_analytics(
     )
     qualified_count = qualified_result.scalar() or 0
 
+    hyros_filters = [
+        Subscriber.org_id == org_id,
+        Subscriber.hyros_purchased.is_(True),
+        Subscriber.created_at >= dt_from,
+        Subscriber.created_at <= dt_to,
+    ]
+    hyros_sub_clause = _subscriber_campaign_clause(
+        campaign_id, attora_campaign_id, org_id=org_id, source_type=source_type
+    )
+    if hyros_sub_clause is not None:
+        hyros_filters.append(hyros_sub_clause)
     hyros_purchases_result = await db.execute(
         select(func.count())
         .select_from(Subscriber)
-        .where(
-            Subscriber.org_id == org_id,
-            Subscriber.hyros_purchased.is_(True),
-            Subscriber.created_at >= dt_from,
-            Subscriber.created_at <= dt_to,
-        )
+        .where(*hyros_filters)
     )
     hyros_confirmed_purchases = hyros_purchases_result.scalar() or 0
 
@@ -790,9 +832,8 @@ async def get_ai_performance(
     fallback_rows = fallback_trend_result.all()
     fallback_trend = []
     for frow in fallback_rows:
-        value = 0.0
-        if frow.messages and int(frow.messages) > 0:
-            value = round(int(frow.fallbacks) / int(frow.messages), 4)
+        messages = int(frow.messages) if frow.messages else 0
+        value = round(int(frow.fallbacks) / messages, 4) if messages > 0 else None
         fallback_trend.append(DailyTrend(date=frow.date, value=value))
 
     return AIPerformanceResponse(
@@ -882,15 +923,21 @@ async def get_organic_keyword_stats(
     keyword: str | None = None,
 ) -> dict:
     """Return organic keyword-specific conversation, conversion, revenue, and funnel counts."""
-    keywords = [keyword] if keyword else ["MACROS", "MUSCLE"]
+    campaign_filters = [
+        AdCampaign.org_id == org_id,
+        func.lower(AdCampaign.source_type) == "organic",
+    ]
+    if keyword:
+        campaign_filters.append(func.upper(AdCampaign.keyword) == keyword.strip().upper())
+    else:
+        # Aggregate across every active organic campaign in the org so newly
+        # registered posts roll into "All Organic" automatically.
+        campaign_filters.extend([
+            AdCampaign.is_active.is_(True),
+            AdCampaign.is_attora_managed.is_(True),
+        ])
 
-    campaign_ids_result = await db.execute(
-        select(AdCampaign.id).where(
-            AdCampaign.org_id == org_id,
-            func.lower(AdCampaign.source_type) == "organic",
-            func.upper(AdCampaign.keyword).in_(keywords),
-        )
-    )
+    campaign_ids_result = await db.execute(select(AdCampaign.id).where(*campaign_filters))
     campaign_ids = [row[0] for row in campaign_ids_result.all()]
 
     if not campaign_ids:
@@ -972,8 +1019,8 @@ async def get_dashboard_overview(
     today = date.today()
     seven_days_ago = today - timedelta(days=7)
 
-    # CPQC and CCR for the last 7 days
-    analytics = await get_analytics(db, org_id, seven_days_ago, today)
+    # CPQC and CCR for the last 7 days — scoped to Attora-managed (organic) campaigns
+    analytics = await get_analytics(db, org_id, seven_days_ago, today, source_type="organic")
 
     # Active conversations count
     active_result = await db.execute(
@@ -1027,59 +1074,69 @@ async def _compute_campaign_health(
     today: date,
 ) -> list[CampaignHealth]:
     """
-    Simple campaign health based on CPA thresholds over the last 7 days.
+    Campaign health for Attora-managed active campaigns over the last 7 days.
 
-    Green: CPA < $50 or no spend
-    Yellow: CPA $50-$100
-    Red: CPA > $100 or zero conversions with spend
+    Uses post_engagement and spend from campaign_metrics.
+    Green: < $0.20/engagement or no spend
+    Yellow: $0.20–$0.50/engagement
+    Red: > $0.50/engagement, or spend with zero engagements
     """
     seven_days_ago = today - timedelta(days=7)
 
-    # Get per-channel stats
-    result = await db.execute(
-        select(
-            DailyAnalytics.channel,
-            func.coalesce(func.sum(DailyAnalytics.ad_spend), 0).label("ad_spend"),
-            func.coalesce(func.sum(DailyAnalytics.conversions), 0).label("conversions"),
-            func.coalesce(func.sum(DailyAnalytics.new_conversations), 0).label("conversations"),
-        )
-        .where(
-            DailyAnalytics.org_id == org_id,
-            DailyAnalytics.date >= seven_days_ago,
-            DailyAnalytics.date <= today,
-        )
-        .group_by(DailyAnalytics.channel)
+    metric_filter = (
+        (CampaignMetric.org_id == org_id)
+        & (CampaignMetric.level == "campaign")
+        & (CampaignMetric.meta_campaign_id == AdCampaign.meta_campaign_id)
+        & (CampaignMetric.date >= seven_days_ago)
+        & (CampaignMetric.date <= today)
     )
+
+    query = (
+        select(
+            AdCampaign.name.label("campaign_name"),
+            func.coalesce(func.sum(CampaignMetric.spend), 0).label("spend"),
+            func.coalesce(func.sum(CampaignMetric.post_engagement), 0).label("engagements"),
+        )
+        .select_from(AdCampaign)
+        .outerjoin(CampaignMetric, metric_filter)
+        .where(AdCampaign.org_id == org_id)
+        .where(AdCampaign.is_attora_managed.is_(True))
+        .where(AdCampaign.is_active.is_(True))
+        .where(AdCampaign.source_type == "organic")
+        .where(AdCampaign.meta_campaign_id.isnot(None))
+        .group_by(AdCampaign.name, AdCampaign.meta_campaign_id)
+        .order_by(func.coalesce(func.sum(CampaignMetric.spend), 0).desc())
+    )
+
+    result = await db.execute(query)
     rows = result.all()
 
     health_items = []
     for row in rows:
-        channel_name = row.channel.value if row.channel else "all"
-        ad_spend = float(row.ad_spend)
-        conversions = int(row.conversions)
-        conversations = int(row.conversations)
+        spend = float(row.spend)
+        engagements = int(row.engagements)
 
-        if ad_spend <= 0:
+        if spend <= 0 and engagements == 0:
             health_status = "green"
-            reason = "No ad spend"
-        elif conversions == 0:
-            health_status = "red"
-            reason = f"No conversions with ${ad_spend:.0f} spend"
-        else:
-            cpa = ad_spend / conversions
-            if cpa < 50:
+            reason = "No activity in last 7 days"
+        elif engagements > 0:
+            cpe = spend / engagements if spend > 0 else 0
+            if cpe < 0.20:
                 health_status = "green"
-                reason = f"CPA ${cpa:.2f}"
-            elif cpa < 100:
+                reason = f"{engagements:,} engagements" + (f" · ${cpe:.2f}/engagement" if spend > 0 else "")
+            elif cpe < 0.50:
                 health_status = "yellow"
-                reason = f"CPA ${cpa:.2f} — consider optimization"
+                reason = f"${cpe:.2f}/engagement — consider optimization"
             else:
                 health_status = "red"
-                reason = f"CPA ${cpa:.2f} — needs attention"
+                reason = f"${cpe:.2f}/engagement — needs attention"
+        else:
+            health_status = "red"
+            reason = f"No engagements with ${spend:.0f} spend"
 
         health_items.append(
             CampaignHealth(
-                name=channel_name,
+                name=row.campaign_name,
                 status=health_status,
                 reason=reason,
             )

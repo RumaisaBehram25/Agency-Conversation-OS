@@ -39,6 +39,11 @@ class AdCampaign(Base, TimestampMixin, OrgScopedMixin):
     # Uniqueness enforced per-org via partial unique index (see __table_args__).
     keyword: Mapped[str | None] = mapped_column(String(100), nullable=True, index=True)
 
+    # Per-campaign conversation script (post-purchase qualifier, nurture branches).
+    # Injected into the system prompt instead of the org-level conversion_playbook
+    # so the AI only sees the script for the subscriber's attributed campaign.
+    conversation_script: Mapped[str | None] = mapped_column(Text, nullable=True)
+
     # Prerequisite story: flag specifying this campaign is Attora-managed
     is_attora_managed: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
 

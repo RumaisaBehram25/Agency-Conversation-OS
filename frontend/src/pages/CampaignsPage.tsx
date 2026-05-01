@@ -8,6 +8,7 @@ import {
   listAdCampaigns,
   updateAdCampaign,
 } from '../api/campaigns';
+import { lookupAdCampaignId } from '../api/settings';
 import { getProducts } from '../api/products';
 import type { AdCampaign, CampaignSourceType, CampaignUTM } from '../types';
 import LoadingSpinner from '../components/ui/LoadingSpinner';
@@ -71,6 +72,16 @@ export default function CampaignsPage() {
   const [keywordDraft, setKeywordDraft] = useState('');
   const [keywordSaving, setKeywordSaving] = useState(false);
 
+  const [editingMetaIdFor, setEditingMetaIdFor] = useState<string | null>(null);
+  const [metaIdDraft, setMetaIdDraft] = useState('');
+  const [metaIdSaving, setMetaIdSaving] = useState(false);
+
+  const [lookupAdId, setLookupAdId] = useState('');
+  const [lookupResult, setLookupResult] = useState<{ ad_id: string; campaign_id: string } | null>(null);
+  const [lookupError, setLookupError] = useState('');
+  const [lookupLoading, setLookupLoading] = useState(false);
+  const [lookupCopied, setLookupCopied] = useState(false);
+
   async function saveKeyword(campaignId: string) {
     const trimmed = keywordDraft.trim().toUpperCase();
     if (!trimmed) {
@@ -93,6 +104,49 @@ export default function CampaignsPage() {
       setError(String(msg));
     } finally {
       setKeywordSaving(false);
+    }
+  }
+
+  async function saveMetaCampaignId(campaignId: string) {
+    const trimmed = metaIdDraft.trim();
+    setMetaIdSaving(true);
+    setError('');
+    try {
+      await updateAdCampaign(campaignId, { meta_campaign_id: trimmed || null });
+      setEditingMetaIdFor(null);
+      setMetaIdDraft('');
+      await load();
+    } catch (e: unknown) {
+      const msg =
+        e && typeof e === 'object' && 'response' in e
+          ? // @ts-expect-error axios response shape
+            e.response?.data?.detail ?? 'Failed to update campaign ID'
+          : 'Failed to update campaign ID';
+      setError(String(msg));
+    } finally {
+      setMetaIdSaving(false);
+    }
+  }
+
+  async function handleLookupAd() {
+    const trimmed = lookupAdId.trim();
+    if (!trimmed) return;
+    setLookupLoading(true);
+    setLookupError('');
+    setLookupResult(null);
+    setLookupCopied(false);
+    try {
+      const result = await lookupAdCampaignId(trimmed);
+      setLookupResult(result);
+    } catch (e: unknown) {
+      const msg =
+        e && typeof e === 'object' && 'response' in e
+          ? // @ts-expect-error axios response shape
+            e.response?.data?.detail ?? 'Lookup failed'
+          : 'Lookup failed';
+      setLookupError(String(msg));
+    } finally {
+      setLookupLoading(false);
     }
   }
 
@@ -338,6 +392,80 @@ export default function CampaignsPage() {
         </div>
       )}
 
+      {/* Ad ID → Campaign ID lookup */}
+      <div className="mb-4 rounded-xl border border-blue-100 bg-blue-50 p-4">
+        <h2 className="mb-1 text-sm font-semibold text-blue-900">Find Campaign ID from Ad ID</h2>
+        <p className="mb-3 text-xs text-blue-700">
+          Paste the Ad ID from your spreadsheet to get the Campaign ID needed for registration.
+        </p>
+        <div className="flex items-center gap-2">
+          <input
+            type="text"
+            placeholder="e.g. 120246040273560659"
+            value={lookupAdId}
+            onChange={(e) => {
+              setLookupAdId(e.target.value);
+              setLookupResult(null);
+              setLookupError('');
+            }}
+            onKeyDown={(e) => { if (e.key === 'Enter') void handleLookupAd(); }}
+            className="flex-1 rounded-md border border-blue-200 bg-white px-3 py-2 text-sm focus:border-blue-400 focus:outline-none focus:ring-1 focus:ring-blue-300"
+          />
+          <button
+            type="button"
+            onClick={() => void handleLookupAd()}
+            disabled={lookupLoading || !lookupAdId.trim()}
+            className="rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
+          >
+            {lookupLoading ? 'Looking up…' : 'Look up'}
+          </button>
+        </div>
+        {lookupError && (
+          <p className="mt-2 text-xs text-red-700">{lookupError}</p>
+        )}
+        {lookupResult && (
+          <div className="mt-3 flex items-center gap-3 rounded-lg border border-blue-200 bg-white px-3 py-2">
+            <div className="flex-1">
+              <p className="text-xs text-gray-500">Campaign ID for ad <span className="font-mono">{lookupResult.ad_id}</span></p>
+              <p className="mt-0.5 font-mono text-sm font-semibold text-gray-900">{lookupResult.campaign_id}</p>
+            </div>
+            <button
+              type="button"
+              onClick={() => {
+                void navigator.clipboard.writeText(lookupResult.campaign_id);
+                setLookupCopied(true);
+                setTimeout(() => setLookupCopied(false), 1500);
+              }}
+              className="shrink-0 rounded-md border border-gray-300 px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50"
+            >
+              {lookupCopied ? 'Copied!' : 'Copy'}
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setNewCampaign({ ...newCampaign, meta_campaign_id: lookupResult.campaign_id, source_type: 'paid' });
+                setLookupResult(null);
+                setLookupAdId('');
+              }}
+              className="shrink-0 rounded-md border border-blue-300 bg-blue-50 px-3 py-1.5 text-xs font-medium text-blue-700 hover:bg-blue-100"
+            >
+              Use in register form
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setMetaIdDraft(lookupResult.campaign_id);
+                setLookupResult(null);
+                setLookupAdId('');
+              }}
+              className="shrink-0 rounded-md border border-emerald-300 bg-emerald-50 px-3 py-1.5 text-xs font-medium text-emerald-700 hover:bg-emerald-100"
+            >
+              Add to organic campaign
+            </button>
+          </div>
+        )}
+      </div>
+
       <form
         onSubmit={handleCreate}
         className="mb-6 grid gap-3 rounded-xl border border-gray-200 bg-white p-4 md:grid-cols-2"
@@ -565,63 +693,66 @@ export default function CampaignsPage() {
                     </td>
                     <td className="px-4 py-3 font-mono text-xs text-gray-700">
                       {c.source_type === 'organic' ? (
-                        editingKeywordId === c.id ? (
-                          <div className="flex items-center gap-1">
-                            <input
-                              autoFocus
-                              type="text"
-                              value={keywordDraft}
-                              onChange={(e) =>
-                                setKeywordDraft(e.target.value.toUpperCase())
-                              }
-                              onKeyDown={(e) => {
-                                if (e.key === 'Enter') void saveKeyword(c.id);
-                                if (e.key === 'Escape') {
-                                  setEditingKeywordId(null);
-                                  setKeywordDraft('');
-                                }
-                              }}
-                              disabled={keywordSaving}
-                              placeholder="MUSCLE"
-                              className="w-24 rounded-md border border-gray-300 bg-white px-2 py-1 font-mono text-xs uppercase focus:border-emerald-400 focus:outline-none focus:ring-1 focus:ring-emerald-300"
-                            />
+                        <div className="flex flex-col gap-1.5">
+                          {/* Keyword */}
+                          {editingKeywordId === c.id ? (
+                            <div className="flex items-center gap-1">
+                              <input
+                                autoFocus
+                                type="text"
+                                value={keywordDraft}
+                                onChange={(e) => setKeywordDraft(e.target.value.toUpperCase())}
+                                onKeyDown={(e) => {
+                                  if (e.key === 'Enter') void saveKeyword(c.id);
+                                  if (e.key === 'Escape') { setEditingKeywordId(null); setKeywordDraft(''); }
+                                }}
+                                disabled={keywordSaving}
+                                placeholder="MUSCLE"
+                                className="w-24 rounded-md border border-gray-300 bg-white px-2 py-1 font-mono text-xs uppercase focus:border-emerald-400 focus:outline-none focus:ring-1 focus:ring-emerald-300"
+                              />
+                              <button type="button" onClick={() => void saveKeyword(c.id)} disabled={keywordSaving} className="rounded-md border border-emerald-300 bg-emerald-50 px-2 py-1 text-xs font-medium text-emerald-700 hover:bg-emerald-100 disabled:opacity-60">{keywordSaving ? '…' : 'Save'}</button>
+                              <button type="button" onClick={() => { setEditingKeywordId(null); setKeywordDraft(''); }} disabled={keywordSaving} className="rounded-md border border-gray-200 px-2 py-1 text-xs text-gray-600 hover:bg-gray-50">✕</button>
+                            </div>
+                          ) : (
                             <button
                               type="button"
-                              onClick={() => void saveKeyword(c.id)}
-                              disabled={keywordSaving}
-                              className="rounded-md border border-emerald-300 bg-emerald-50 px-2 py-1 text-xs font-medium text-emerald-700 hover:bg-emerald-100 disabled:opacity-60"
+                              onClick={() => { setEditingKeywordId(c.id); setKeywordDraft(c.keyword ?? ''); }}
+                              className={c.keyword ? 'rounded-md border border-gray-200 bg-emerald-50 px-2 py-1 font-mono text-xs text-emerald-800 hover:border-emerald-400' : 'rounded-md border border-dashed border-amber-300 bg-amber-50 px-2 py-1 text-xs font-medium text-amber-800 hover:border-amber-500'}
+                              title={c.keyword ? 'Click to edit keyword' : 'Click to add keyword'}
                             >
-                              {keywordSaving ? '…' : 'Save'}
+                              {c.keyword ?? '+ Add keyword'}
                             </button>
+                          )}
+                          {/* Boost / Meta Campaign ID */}
+                          {editingMetaIdFor === c.id ? (
+                            <div className="flex items-center gap-1">
+                              <input
+                                autoFocus
+                                type="text"
+                                value={metaIdDraft}
+                                onChange={(e) => setMetaIdDraft(e.target.value.trim())}
+                                onKeyDown={(e) => {
+                                  if (e.key === 'Enter') void saveMetaCampaignId(c.id);
+                                  if (e.key === 'Escape') { setEditingMetaIdFor(null); setMetaIdDraft(''); }
+                                }}
+                                disabled={metaIdSaving}
+                                placeholder="Campaign ID"
+                                className="w-36 rounded-md border border-gray-300 bg-white px-2 py-1 font-mono text-xs focus:border-blue-400 focus:outline-none focus:ring-1 focus:ring-blue-300"
+                              />
+                              <button type="button" onClick={() => void saveMetaCampaignId(c.id)} disabled={metaIdSaving} className="rounded-md border border-blue-300 bg-blue-50 px-2 py-1 text-xs font-medium text-blue-700 hover:bg-blue-100 disabled:opacity-60">{metaIdSaving ? '…' : 'Save'}</button>
+                              <button type="button" onClick={() => { setEditingMetaIdFor(null); setMetaIdDraft(''); }} disabled={metaIdSaving} className="rounded-md border border-gray-200 px-2 py-1 text-xs text-gray-600 hover:bg-gray-50">✕</button>
+                            </div>
+                          ) : (
                             <button
                               type="button"
-                              onClick={() => {
-                                setEditingKeywordId(null);
-                                setKeywordDraft('');
-                              }}
-                              disabled={keywordSaving}
-                              className="rounded-md border border-gray-200 px-2 py-1 text-xs text-gray-600 hover:bg-gray-50"
+                              onClick={() => { setEditingMetaIdFor(c.id); setMetaIdDraft(c.meta_campaign_id ?? ''); }}
+                              className={c.meta_campaign_id ? 'rounded-md border border-gray-200 bg-blue-50 px-2 py-1 font-mono text-xs text-blue-800 hover:border-blue-400' : 'rounded-md border border-dashed border-blue-200 bg-white px-2 py-1 text-xs font-medium text-blue-500 hover:border-blue-400'}
+                              title={c.meta_campaign_id ? 'Click to edit boost campaign ID' : 'Click to add boost campaign ID'}
                             >
-                              ✕
+                              {c.meta_campaign_id ?? '+ Add boost ID'}
                             </button>
-                          </div>
-                        ) : (
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setEditingKeywordId(c.id);
-                              setKeywordDraft(c.keyword ?? '');
-                            }}
-                            className={
-                              c.keyword
-                                ? 'rounded-md border border-gray-200 bg-emerald-50 px-2 py-1 font-mono text-xs text-emerald-800 hover:border-emerald-400'
-                                : 'rounded-md border border-dashed border-amber-300 bg-amber-50 px-2 py-1 text-xs font-medium text-amber-800 hover:border-amber-500'
-                            }
-                            title={c.keyword ? 'Click to edit keyword' : 'Click to add keyword'}
-                          >
-                            {c.keyword ?? '+ Add keyword'}
-                          </button>
-                        )
+                          )}
+                        </div>
                       ) : (
                         c.meta_campaign_id ?? '-'
                       )}

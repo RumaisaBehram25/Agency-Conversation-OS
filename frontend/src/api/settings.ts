@@ -40,10 +40,11 @@ export interface MetaSyncStatus {
 export async function syncMetaNow(
   days_back = 7,
   granular = true,
+  source_type?: 'paid' | 'organic',
 ): Promise<MetaSyncNowResponse> {
   const response = await client.post<MetaSyncNowResponse>(
     '/settings/meta/sync-now',
-    { days_back, granular },
+    { days_back, granular, source_type: source_type ?? null },
   );
   return response.data;
 }
@@ -68,5 +69,17 @@ export interface HyrosSyncResult {
 
 export async function syncHyrosNow(): Promise<HyrosSyncResult> {
   const response = await client.post<HyrosSyncResult>('/settings/hyros/sync');
+  return response.data;
+}
+
+export interface AdLookupResult {
+  ad_id: string;
+  campaign_id: string;
+}
+
+export async function lookupAdCampaignId(adId: string): Promise<AdLookupResult> {
+  const response = await client.get<AdLookupResult>(
+    `/settings/meta/lookup-ad?ad_id=${encodeURIComponent(adId)}`
+  );
   return response.data;
 }

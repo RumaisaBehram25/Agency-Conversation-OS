@@ -121,8 +121,8 @@ export default function ROIWaterfall({ roi }: ROIWaterfallProps) {
               <tbody className="divide-y divide-gray-200">
                 <tr>
                   <td className="px-4 py-2 text-sm text-gray-700">CPA</td>
-                  <td className="px-4 py-2 text-sm text-gray-900">{formatCurrency(roi.baseline_cpa)}</td>
-                  <td className="px-4 py-2 text-sm text-gray-900">{formatCurrency(roi.current_cpa)}</td>
+                  <td className="px-4 py-2 text-sm text-gray-900">{roi.baseline_cpa != null ? formatCurrency(roi.baseline_cpa) : '—'}</td>
+                  <td className="px-4 py-2 text-sm text-gray-900">{roi.current_cpa != null ? formatCurrency(roi.current_cpa) : '—'}</td>
                   <td className="px-4 py-2 text-sm">
                     {roi.baseline_cpa > 0 ? (
                       <span

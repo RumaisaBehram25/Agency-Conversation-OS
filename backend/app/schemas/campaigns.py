@@ -15,12 +15,15 @@ class CampaignSummary(BaseModel):
     meta_campaign_id: str
     meta_campaign_name: str | None = None
     status: str | None = None
+    source_type: str = "paid"
+    daily_budget: float | None = None
     spend: float = 0.0
     impressions: int = 0
     clicks: int = 0
     leads: int = 0
     link_clicks: int = 0
     video_views: int = 0
+    post_engagement: int = 0
     cpc: float | None = None
     cpm: float | None = None
     ctr: float | None = None

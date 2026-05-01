@@ -58,9 +58,14 @@ export default function AnalyticsPage() {
   })();
   const SYNC_ETA_MS = Math.min(240_000, Math.max(30_000, syncDaysBack * 2_000));
 
+  const campaignQueryParams = {
+    ...dateRange,
+    ...(sourceFilter !== 'all' ? { source_type: sourceFilter } : {}),
+  };
+
   const { data: campaigns = [] } = useQuery<CampaignSummary[]>({
-    queryKey: ['campaigns-for-analytics', dateRange],
-    queryFn: () => getCampaigns(dateRange),
+    queryKey: ['campaigns-for-analytics', campaignQueryParams],
+    queryFn: () => getCampaigns(campaignQueryParams),
   });
 
   const { data: organicCampaigns = [] } = useQuery<AdCampaign[]>({
@@ -192,7 +197,7 @@ export default function AnalyticsPage() {
       }),
       queryClient.invalidateQueries({ queryKey: ['ai-performance', dateRange] }),
       queryClient.invalidateQueries({ queryKey: ['conversations-count', dateRange] }),
-      queryClient.invalidateQueries({ queryKey: ['campaigns-for-analytics', dateRange] }),
+      queryClient.invalidateQueries({ queryKey: ['campaigns-for-analytics', campaignQueryParams] }),
       queryClient.invalidateQueries({ queryKey: ['ad-campaigns-organic'] }),
       queryClient.invalidateQueries({ queryKey: ['organic-keyword-stats', dateRange] }),
     ]);
@@ -227,7 +232,7 @@ export default function AnalyticsPage() {
     const POLL_INTERVAL_MS = 3000;
 
     try {
-      const kick = await syncMetaNow(syncDaysBack, true);
+      const kick = await syncMetaNow(syncDaysBack, true, sourceFilter !== 'all' ? sourceFilter : undefined);
       setSyncStatus(kick.message);
 
       const pollStartedAt = Date.now();
@@ -432,6 +437,16 @@ export default function AnalyticsPage() {
                 value={selectedCampaign}
                 onChange={(e) => {
                   const v = e.target.value;
+                  if (v === '__all_paid__') {
+                    setSourceFilter('paid');
+                    setSelectedCampaign('');
+                    return;
+                  }
+                  if (v === '__all_organic__') {
+                    setSourceFilter('organic');
+                    setSelectedCampaign('');
+                    return;
+                  }
                   setSelectedCampaign(v);
                   if (!v) return;
                   const match = filteredOptions.find((o) => o.value === v);
@@ -442,6 +457,9 @@ export default function AnalyticsPage() {
                 <option value="">All Campaigns</option>
                 {sourceFilter !== 'organic' && paidOptions.length > 0 && (
                   <optgroup label="Paid">
+                    {sourceFilter === 'all' && (
+                      <option value="__all_paid__">All Paid Campaigns</option>
+                    )}
                     {paidOptions.map((o) => (
                       <option key={`paid-${o.value}`} value={o.value}>
                         {o.label}
@@ -451,6 +469,9 @@ export default function AnalyticsPage() {
                 )}
                 {sourceFilter !== 'paid' && organicOptions.length > 0 && (
                   <optgroup label="Organic">
+                    {sourceFilter === 'all' && (
+                      <option value="__all_organic__">All Organic Campaigns</option>
+                    )}
                     {organicOptions.map((o) => (
                       <option key={`organic-${o.value}`} value={o.value}>
                         {o.label}
@@ -480,7 +501,13 @@ export default function AnalyticsPage() {
                 <path strokeLinecap="round" strokeLinejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182m0-4.991v4.99" />
               </svg>
             )}
-            {syncing ? 'Syncing Meta…' : 'Sync Meta Data'}
+            {syncing
+              ? 'Syncing Meta…'
+              : sourceFilter === 'organic'
+                ? 'Sync Organic Campaigns'
+                : sourceFilter === 'paid'
+                  ? 'Sync Paid Campaigns'
+                  : 'Sync Meta Data'}
           </Button>
           <Button variant="secondary" onClick={handleExport}>
             <svg className="mr-2 h-4 w-4" fill="none" viewBox="0 0 24 24" strokeWidth="1.5" stroke="currentColor">
@@ -526,7 +553,6 @@ export default function AnalyticsPage() {
               avgResponseTimeMs={analytics.avg_response_time_ms}
               qualificationRate={analytics.qualification_rate}
               hyrosConfirmedPurchases={analytics.hyros_confirmed_purchases}
-              cpqcIncludesOrganic={!!selectedCampaign}
             />
           )}
 
@@ -564,6 +590,88 @@ export default function AnalyticsPage() {
                   <p className="mt-1 text-2xl font-bold text-green-700">{formatCurrency(statRevenue)}</p>
                 </div>
               </div>
+            );
+          })()}
+
+          {/* Campaign Performance Table */}
+          {(() => {
+            const visibleCampaigns = (() => {
+              if (selectedCampaign) {
+                if (selectedCampaignSource === 'paid') {
+                  return campaigns.filter((c) => c.meta_campaign_id === selectedCampaign);
+                }
+                // organic: selectedCampaign is the Attora UUID — resolve meta_campaign_id
+                const linked = organicCampaigns.find((c) => c.id === selectedCampaign);
+                if (linked?.meta_campaign_id) {
+                  return campaigns.filter((c) => c.meta_campaign_id === linked.meta_campaign_id);
+                }
+                return [];
+              }
+              return sourceFilter === 'all'
+                ? campaigns.filter((c) => c.spend > 0)
+                : campaigns;
+            })();
+            return visibleCampaigns.length > 0 && (
+            <div className="card overflow-hidden">
+              <h3 className="text-sm font-semibold text-gray-900 mb-4">Campaign Performance</h3>
+              <div className="overflow-x-auto">
+                <table className="min-w-full text-sm">
+                  <thead>
+                    <tr className="border-b border-gray-100">
+                      <th className="pb-2 pr-4 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Campaign</th>
+                      <th className="pb-2 px-4 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Results</th>
+                      <th className="pb-2 px-4 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Cost / Result</th>
+                      <th className="pb-2 px-4 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Daily Budget</th>
+                      <th className="pb-2 px-4 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Amount Spent</th>
+                      <th className="pb-2 pl-4 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Impressions</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-50">
+                    {visibleCampaigns.map((c) => {
+                      const cpr = c.post_engagement > 0 ? c.spend / c.post_engagement : null;
+                      return (
+                        <tr
+                          key={c.meta_campaign_id}
+                          className="hover:bg-gray-50 cursor-pointer"
+                          onClick={() => {
+                            setSelectedCampaign(c.meta_campaign_id);
+                            setSelectedCampaignSource('paid');
+                            setSourceFilter('paid');
+                          }}
+                        >
+                          <td className="py-2.5 pr-4 font-medium text-gray-900 max-w-xs truncate">
+                            {c.meta_campaign_name || 'Unnamed'}
+                            {c.status && (
+                              <span className={`ml-2 inline-block rounded-full px-1.5 py-0.5 text-[10px] font-medium ${
+                                c.status === 'ACTIVE' ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-500'
+                              }`}>
+                                {c.status}
+                              </span>
+                            )}
+                          </td>
+                          <td className="py-2.5 px-4 text-right tabular-nums text-gray-700">
+                            {c.post_engagement.toLocaleString()}
+                            <span className="ml-1 text-xs text-gray-400">engagements</span>
+                          </td>
+                          <td className="py-2.5 px-4 text-right tabular-nums text-gray-700">
+                            {cpr != null ? `$${cpr.toFixed(2)}` : '—'}
+                          </td>
+                          <td className="py-2.5 px-4 text-right tabular-nums text-gray-700">
+                            {c.daily_budget != null ? `$${c.daily_budget.toFixed(2)}` : '—'}
+                          </td>
+                          <td className="py-2.5 px-4 text-right tabular-nums text-gray-700">
+                            ${c.spend.toFixed(2)}
+                          </td>
+                          <td className="py-2.5 pl-4 text-right tabular-nums text-gray-700">
+                            {c.impressions.toLocaleString()}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </div>
             );
           })()}
 

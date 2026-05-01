@@ -42,6 +42,7 @@ async def sync_ad_spend(
     days_back: int = 7,
     granular: bool = True,
     org_id: uuid.UUID | None = None,
+    source_type: str | None = None,
 ) -> dict:
     """
     Sync ad spend from Meta Marketing API.
@@ -178,7 +179,7 @@ async def sync_ad_spend(
         # Restrict ingestion to Attora-managed campaigns. If the org hasn't
         # registered any, skip granular ingest entirely — we do not want
         # metrics for campaigns we aren't authorized to act on.
-        attora_campaign_ids = await _load_attora_meta_campaign_ids(db, org.id)
+        attora_campaign_ids = await _load_attora_meta_campaign_ids(db, org.id, source_type=source_type)
         if not attora_campaign_ids:
             logger.info(
                 "Granular sync: org %s has no Attora-managed campaigns registered; "
@@ -322,17 +323,20 @@ async def sync_ad_spend(
 
 
 async def _load_attora_meta_campaign_ids(
-    db: AsyncSession, org_id: uuid.UUID
+    db: AsyncSession,
+    org_id: uuid.UUID,
+    source_type: str | None = None,
 ) -> set[str]:
     """Return the set of meta_campaign_ids this org has flagged as Attora-managed."""
-    result = await db.execute(
-        select(AdCampaign.meta_campaign_id).where(
-            AdCampaign.org_id == org_id,
-            AdCampaign.is_attora_managed.is_(True),
-            AdCampaign.is_active.is_(True),
-            AdCampaign.meta_campaign_id.isnot(None),
-        )
+    query = select(AdCampaign.meta_campaign_id).where(
+        AdCampaign.org_id == org_id,
+        AdCampaign.is_attora_managed.is_(True),
+        AdCampaign.is_active.is_(True),
+        AdCampaign.meta_campaign_id.isnot(None),
     )
+    if source_type is not None:
+        query = query.where(AdCampaign.source_type == source_type)
+    result = await db.execute(query)
     return {row for row, in result.all() if row}
 
 

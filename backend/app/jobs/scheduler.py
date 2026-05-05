@@ -10,13 +10,11 @@ from typing import Literal
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
-from apscheduler.triggers.interval import IntervalTrigger
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.database import async_session_factory
-from app.services.follow_up_engine import dispatch_follow_ups
 from app.jobs.olap_exports import (
     archive_messages_to_olap,
     archive_messages_delta_to_olap,
@@ -351,13 +349,6 @@ async def _run_archive_messages() -> None:
         logger.info("Scheduled archived_messages export result: %s", result)
 
 
-async def _run_follow_ups_dispatch() -> None:
-    async with async_session_factory() as session:
-        summary = await dispatch_follow_ups(session)
-        await session.commit()
-        logger.info("Scheduled follow-ups dispatch result: %s", summary)
-
-
 async def _run_parity() -> None:
     org_ids = [uuid.UUID(value) for value in settings.olap_scheduler_parity_org_ids_list]
     async with async_session_factory() as session:
@@ -377,93 +368,24 @@ async def _run_parity() -> None:
 
 
 def build_scheduler() -> AsyncIOScheduler:
-    """Create the APScheduler instance for self-hosted OLAP and optional follow-up jobs."""
+    """Create the APScheduler instance for self-hosted OLAP jobs."""
     scheduler = AsyncIOScheduler(timezone=settings.olap_scheduler_timezone)
-    if settings.olap_scheduler_enabled:
-        scheduler.add_job(
-            _run_export_daily_analytics,
-            CronTrigger.from_crontab(
-                settings.olap_scheduler_export_daily_analytics_cron,
-                timezone=settings.olap_scheduler_timezone,
-            ),
-            id="olap-export-daily-analytics",
-            replace_existing=True,
-            max_instances=1,
-        )
-        scheduler.add_job(
-            _run_export_ai_usage,
-            CronTrigger.from_crontab(
-                settings.olap_scheduler_export_ai_usage_cron,
-                timezone=settings.olap_scheduler_timezone,
-            ),
-            id="olap-export-ai-usage",
-            replace_existing=True,
-            max_instances=1,
-        )
-        scheduler.add_job(
-            _run_archive_messages,
-            CronTrigger.from_crontab(
-                settings.olap_scheduler_archive_messages_cron,
-                timezone=settings.olap_scheduler_timezone,
-            ),
-            id="olap-archive-messages",
-            replace_existing=True,
-            max_instances=1,
-        )
-        scheduler.add_job(
-            _run_parity,
-            CronTrigger.from_crontab(
-                settings.olap_scheduler_parity_cron,
-                timezone=settings.olap_scheduler_timezone,
-            ),
-            id="olap-parity",
-            replace_existing=True,
-            max_instances=1,
-        )
-    if settings.follow_up_scheduler_enabled:
-        if settings.follow_up_scheduler_interval_seconds > 0:
-            scheduler.add_job(
-                _run_follow_ups_dispatch,
-                IntervalTrigger(
-                    seconds=settings.follow_up_scheduler_interval_seconds,
-                    timezone=settings.olap_scheduler_timezone,
-                ),
-                id="follow-ups-dispatch",
-                replace_existing=True,
-                max_instances=1,
-            )
-        else:
-            scheduler.add_job(
-                _run_follow_ups_dispatch,
-                CronTrigger.from_crontab(
-                    settings.follow_up_scheduler_cron,
-                    timezone=settings.olap_scheduler_timezone,
-                ),
-                id="follow-ups-dispatch",
-                replace_existing=True,
-                max_instances=1,
-            )
+    scheduler.add_job(_run_export_daily_analytics, CronTrigger.from_crontab(settings.olap_scheduler_export_daily_analytics_cron, timezone=settings.olap_scheduler_timezone), id="olap-export-daily-analytics", replace_existing=True, max_instances=1)
+    scheduler.add_job(_run_export_ai_usage, CronTrigger.from_crontab(settings.olap_scheduler_export_ai_usage_cron, timezone=settings.olap_scheduler_timezone), id="olap-export-ai-usage", replace_existing=True, max_instances=1)
+    scheduler.add_job(_run_archive_messages, CronTrigger.from_crontab(settings.olap_scheduler_archive_messages_cron, timezone=settings.olap_scheduler_timezone), id="olap-archive-messages", replace_existing=True, max_instances=1)
+    scheduler.add_job(_run_parity, CronTrigger.from_crontab(settings.olap_scheduler_parity_cron, timezone=settings.olap_scheduler_timezone), id="olap-parity", replace_existing=True, max_instances=1)
     return scheduler
 
 
 async def main() -> None:
     """Run the scheduler loop until the process is stopped."""
-    if not settings.olap_scheduler_enabled and not settings.follow_up_scheduler_enabled:
-        logger.info(
-            "No scheduler jobs enabled (OLAP=%s, follow_ups=%s); exiting",
-            settings.olap_scheduler_enabled,
-            settings.follow_up_scheduler_enabled,
-        )
+    if not settings.olap_scheduler_enabled:
+        logger.info("OLAP scheduler is disabled via config; exiting")
         return
 
     scheduler = build_scheduler()
     scheduler.start()
-    logger.info(
-        "Scheduler started (timezone=%s, OLAP=%s, follow_ups=%s)",
-        settings.olap_scheduler_timezone,
-        settings.olap_scheduler_enabled,
-        settings.follow_up_scheduler_enabled,
-    )
+    logger.info("OLAP scheduler started with timezone=%s", settings.olap_scheduler_timezone)
     try:
         await asyncio.Event().wait()
     finally:

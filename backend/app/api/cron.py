@@ -1,7 +1,6 @@
 """
 Attora — Cron Job API Routes
 
-POST /api/cron/follow-ups           — Dispatch campaign follow-ups (recommended every ~15 min)
 POST /api/cron/stale-conversations  — Mark stale conversations
 POST /api/cron/daily-digest         — Aggregate daily analytics
 POST /api/cron/ad-spend-sync        — Sync ad spend and dual-write campaign facts

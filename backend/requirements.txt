@@ -25,9 +25,10 @@ bcrypt==4.2.1
 # Encryption
 cryptography==44.0.0
 
-# HTTP
+# HTTP / AWS SDK (explicit botocore pin keeps boto3 + local installs consistent)
 httpx==0.28.1
 boto3==1.37.38
+botocore>=1.37.38,<1.38
 trino==0.333.0
 
 # OLAP / Parquet

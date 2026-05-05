@@ -242,11 +242,15 @@ async def olap_analytics_overview(
         if not _is_empty_analytics_response(response):
             return response
         logger.info("OLAP analytics endpoint returned empty data for org %s; falling back to PostgreSQL", org_id)
-        return await get_analytics(db, org_id, date_from, date_to, channel)
+        return await get_analytics(
+            db, org_id, date_from, date_to, channel, None, None, None
+        )
     except Exception as error:
         logger.exception("OLAP analytics endpoint failed for org %s; falling back to PostgreSQL", org_id)
         try:
-            return await get_analytics(db, org_id, date_from, date_to, channel)
+            return await get_analytics(
+                db, org_id, date_from, date_to, channel, None, None, None
+            )
         except Exception:
             _raise_olap_error(error)
 

@@ -44,6 +44,10 @@ class FakeResult:
     def all(self):
         return self._all_rows
 
+    def __iter__(self):
+        """SQLAlchemy `Result` is iterable for streaming rows (e.g. subqueries)."""
+        return iter(self._all_rows)
+
 
 class QueueSession:
     def __init__(self, results=None):
@@ -146,7 +150,16 @@ def test_dashboard_contract(client, monkeypatch):
 def test_analytics_contracts(client, monkeypatch):
     test_client, _, _ = client
 
-    async def fake_analytics(db, org_id, date_from, date_to, channel):
+    async def fake_analytics(
+        db,
+        org_id,
+        date_from,
+        date_to,
+        channel,
+        campaign_id=None,
+        attora_campaign_id=None,
+        source_type=None,
+    ):
         return {
             "date_from": date_from,
             "date_to": date_to,
@@ -155,15 +168,30 @@ def test_analytics_contracts(client, monkeypatch):
             "ccr": 0.12,
             "avg_response_time_ms": 350,
             "qualification_rate": 0.3,
+            "hyros_confirmed_purchases": 0,
+            "cost_per_purchase": None,
+            "cost_per_conversation": None,
+            "purchases_count": 0,
+            "conversations_count": 0,
             "total_conversations": 100,
             "total_conversions": 12,
             "total_revenue": 950.0,
             "funnel": [{"name": "conversations", "volume": 100, "drop_off_rate": None}],
             "cpqc_trend": [{"date": date(2026, 4, 1), "value": 10.0}],
             "ccr_trend": [{"date": date(2026, 4, 1), "value": 0.1}],
+            "purchases_over_time": [],
+            "organic_posts": [],
         }
 
-    async def fake_roi(db, org_id, date_from, date_to):
+    async def fake_roi(
+        db,
+        org_id,
+        date_from,
+        date_to,
+        campaign_id=None,
+        attora_campaign_id=None,
+        source_type=None,
+    ):
         return {
             "date_from": date_from,
             "date_to": date_to,
@@ -224,9 +252,26 @@ def test_analytics_contracts(client, monkeypatch):
     analytics_response = test_client.get("/api/analytics")
     assert analytics_response.status_code == 200
     assert set(analytics_response.json().keys()) == {
-        "date_from", "date_to", "channel", "cpqc", "ccr", "avg_response_time_ms",
-        "qualification_rate", "total_conversations", "total_conversions", "total_revenue",
-        "funnel", "cpqc_trend", "ccr_trend",
+        "date_from",
+        "date_to",
+        "channel",
+        "cpqc",
+        "ccr",
+        "avg_response_time_ms",
+        "qualification_rate",
+        "hyros_confirmed_purchases",
+        "cost_per_purchase",
+        "cost_per_conversation",
+        "purchases_count",
+        "conversations_count",
+        "total_conversations",
+        "total_conversions",
+        "total_revenue",
+        "funnel",
+        "cpqc_trend",
+        "ccr_trend",
+        "purchases_over_time",
+        "organic_posts",
     }
 
     roi_response = test_client.get("/api/analytics/roi")
@@ -252,13 +297,16 @@ def test_campaign_contracts(client):
     campaign_row = SimpleNamespace(
         meta_campaign_id="cmp_1",
         meta_campaign_name="Campaign 1",
+        source_type="paid",
         status="ACTIVE",
+        daily_budget=None,
         spend=100.0,
         impressions=1000,
         clicks=50,
         leads=5,
         link_clicks=20,
         video_views=200,
+        post_engagement=0,
         cpc=2.0,
         cpm=10.0,
         ctr=0.05,
@@ -327,7 +375,16 @@ def test_root_reporting_endpoints_ignore_olap_flag(client, monkeypatch):
             "campaign_health": [{"name": "messenger", "status": "green", "reason": "OK"}],
         }
 
-    async def fake_analytics(db, org_id, date_from, date_to, channel):
+    async def fake_analytics(
+        db,
+        org_id,
+        date_from,
+        date_to,
+        channel,
+        campaign_id=None,
+        attora_campaign_id=None,
+        source_type=None,
+    ):
         return {
             "date_from": date_from,
             "date_to": date_to,
@@ -336,12 +393,19 @@ def test_root_reporting_endpoints_ignore_olap_flag(client, monkeypatch):
             "ccr": 0.15,
             "avg_response_time_ms": 320,
             "qualification_rate": 0.15,
+            "hyros_confirmed_purchases": 0,
+            "cost_per_purchase": None,
+            "cost_per_conversation": None,
+            "purchases_count": 0,
+            "conversations_count": 0,
             "total_conversations": 20,
             "total_conversions": 3,
             "total_revenue": 150.0,
             "funnel": [{"name": "conversations", "volume": 20, "drop_off_rate": None}],
             "cpqc_trend": [{"date": date(2026, 4, 1), "value": 9.0}],
             "ccr_trend": [{"date": date(2026, 4, 1), "value": 0.15}],
+            "purchases_over_time": [],
+            "organic_posts": [],
         }
 
     def fail_if_called(*args, **kwargs):
@@ -428,10 +492,14 @@ def test_conversation_contracts(client):
         ),
         messages=[detail_message],
     )
+    latest_preview_row = SimpleNamespace(
+        conversation_id=conversation.id,
+        content="Latest message preview",
+    )
     fake_db = QueueSession([
         FakeResult(scalar=1),
         FakeResult(scalars=[conversation]),
-        FakeResult(scalar="Latest message preview"),
+        FakeResult(all_rows=[latest_preview_row]),
         FakeResult(scalar=detail_conv),
     ])
 
@@ -463,6 +531,13 @@ def test_subscriber_contracts(client):
         first_message_at=datetime(2026, 4, 1, tzinfo=timezone.utc),
         last_message_at=datetime(2026, 4, 2, tzinfo=timezone.utc),
         created_at=datetime(2026, 4, 1, tzinfo=timezone.utc),
+        utm_source=None,
+        utm_medium=None,
+        utm_campaign=None,
+        utm_content=None,
+        hyros_purchased=False,
+        hyros_product=None,
+        hyros_synced_at=None,
     )
     detail_subscriber = SimpleNamespace(
         id=subscriber.id,
@@ -484,6 +559,20 @@ def test_subscriber_contracts(client):
         total_messages=5,
         created_at=subscriber.created_at,
         updated_at=datetime(2026, 4, 2, tzinfo=timezone.utc),
+        utm_source=None,
+        utm_medium=None,
+        utm_campaign=None,
+        utm_content=None,
+        hyros_purchased=False,
+        hyros_product=None,
+        hyros_purchase_date=None,
+        hyros_lead_id=None,
+        hyros_email=None,
+        hyros_origin_source=None,
+        hyros_origin_tag=None,
+        hyros_traffic_source=None,
+        hyros_creative_name=None,
+        hyros_synced_at=None,
         conversations=[
             SimpleNamespace(
                 id=uuid.uuid4(),
@@ -569,6 +658,7 @@ def test_settings_contracts(client, monkeypatch):
         meta_ad_account_id="ad_1",
         meta_page_id="page_1",
         meta_business_manager_id="bm_1",
+        hyros_api_key=None,
         plan="starter",
         monthly_conversation_limit=1000,
         created_at=datetime(2026, 4, 1, tzinfo=timezone.utc),
@@ -623,10 +713,11 @@ def test_ai_config_contracts(client):
 
 
 def test_auth_contracts(client, monkeypatch):
-    test_client, test_user, _ = client
+    test_client, test_user, org_id = client
     fake_db = QueueSession([
         FakeResult(scalar=test_user),
         FakeResult(scalar=test_user),
+        FakeResult(scalar=org_id),
     ])
 
     monkeypatch.setattr(auth_api, "verify_password", lambda raw, hashed: True)
@@ -652,6 +743,12 @@ def test_auth_contracts(client, monkeypatch):
 
     me_response = test_client.get("/api/auth/me")
     assert me_response.status_code == 200
-    assert set(me_response.json().keys()) == {"id", "email", "is_active", "created_at"}
+    assert set(me_response.json().keys()) == {
+        "id",
+        "email",
+        "is_active",
+        "created_at",
+        "org_id",
+    }
 
     app.dependency_overrides.pop(get_db, None)

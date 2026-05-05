@@ -22,13 +22,14 @@ import logging
 import time
 import uuid
 
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
 
-from app.models.campaign import AdCampaign
 from app.schemas.ai_engine import AIResponse, IntentType
-from app.schemas.campaign import build_utm_url
+from app.utils.dm_links import DmSubscriberView, build_dm_link
+from app.services.campaign_utm_resolver import (
+    dm_utm_strings_from_campaign,
+    fetch_managed_campaign_with_utm,
+)
 from app.services.buyer_stage import classify_buyer_stage
 from app.services.classifier import classify_message
 from app.services.config_loader import load_org_config
@@ -128,7 +129,7 @@ async def _load_subscriber_tagged_urls(
     Returns a dict with keys "product_page", "checkout", "success" — only entries
     with a configured URL are included. Non-fatal on any failure; returns {}.
     """
-    result, _ = await _load_subscriber_tagged_urls_with_product(
+    result, *_ = await _load_subscriber_tagged_urls_with_product(
         db=db,
         org_id=org_id,
         attora_campaign_id=attora_campaign_id,
@@ -150,71 +151,35 @@ async def _load_subscriber_tagged_urls_with_product(
     linked product_id (so the prompt builder can filter the product catalog
     to just the campaign-attributed product).
 
-    Returns: (urls_dict, product_id_str_or_None).
+    Returns: (urls_dict, product_id_str_or_None, utm_campaign_or_None, utm_source_or_None).
     """
     if db is None:
-        return {}, None
-
-    campaign_uuid: uuid.UUID | None = None
-    if attora_campaign_id:
-        try:
-            campaign_uuid = uuid.UUID(attora_campaign_id)
-        except (ValueError, TypeError):
-            campaign_uuid = None
+        return {}, None, None, None
 
     try:
-        # Primary: use subscriber-attributed campaign when present.
-        query = (
-            select(AdCampaign)
-            .where(
-                AdCampaign.org_id == org_id,
-                AdCampaign.is_active.is_(True),
-                AdCampaign.is_attora_managed.is_(True),
-            )
-            .options(selectinload(AdCampaign.utm))
-            .order_by(AdCampaign.created_at.desc())
-        )
-        if campaign_uuid is not None:
-            query = query.where(AdCampaign.id == campaign_uuid)
-
-        result = await db.execute(query.limit(1))
-        campaign = result.scalar_one_or_none()
-
-        # Fallback: most recent active managed campaign with UTM configured.
-        if campaign is None or campaign.utm is None:
-            fallback_result = await db.execute(
-                select(AdCampaign)
-                .where(
-                    AdCampaign.org_id == org_id,
-                    AdCampaign.is_active.is_(True),
-                    AdCampaign.is_attora_managed.is_(True),
-                )
-                .options(selectinload(AdCampaign.utm))
-                .order_by(AdCampaign.created_at.desc())
-                .limit(10)
-            )
-            candidates = fallback_result.scalars().all()
-            campaign = next((c for c in candidates if c.utm is not None), None)
+        campaign = await fetch_managed_campaign_with_utm(db, org_id, attora_campaign_id)
 
         if campaign is None or campaign.utm is None:
-            return {}, None
+            return {}, None, None, None
 
-        # Stamp identity params so the landing page can attribute back to
-        # this specific lead. Prefer the pre-built *_utm_url fields (which
-        # already have utm_source/utm_medium/utm_campaign baked in); fall
-        # back to the raw base URL only if the _utm_url variant is missing.
-        identity: dict[str, str] = {"attora_sub": subscriber_id}
-        if attora_id:
-            identity["attora_id"] = attora_id
-
+        # Prefer the pre-built *_utm_url fields (which already have funnel
+        # utm_* baked in); fall back to the raw base URL only if the _utm_url
+        # variant is missing. `build_dm_link` merges attora_* identity and
+        # forces UTM medium to ``dm`` for outbound DM attribution.
         utm = campaign.utm
         urls: dict[str, str] = {}
+        sub_view = DmSubscriberView.from_strings(subscriber_id, attora_id)
 
         def _stamp(base: str | None, tagged: str | None) -> str | None:
             source = tagged or base
             if not source:
                 return None
-            return build_utm_url(source, identity)
+            return build_dm_link(
+                source,
+                sub_view,
+                utm.utm_campaign or "",
+                utm.utm_source or "",
+            )
 
         product_page = _stamp(utm.product_page_url, utm.product_page_utm_url)
         if product_page:
@@ -231,14 +196,20 @@ async def _load_subscriber_tagged_urls_with_product(
         product_id_str = (
             str(campaign.product_id) if campaign.product_id else None
         )
-        return urls, product_id_str
+        utm_c, utm_s = dm_utm_strings_from_campaign(campaign)
+        return (
+            urls,
+            product_id_str,
+            utm_c,
+            utm_s,
+        )
     except Exception as e:
         logger.warning(
             "Failed to load per-subscriber UTM URLs for campaign %s: %s",
             attora_campaign_id,
             e,
         )
-        return {}, None
+        return {}, None, None, None
 
 
 async def process_message(
@@ -371,6 +342,8 @@ async def _run_pipeline(
     (
         context.subscriber_tagged_urls,
         context.campaign_product_id,
+        context.dm_utm_campaign,
+        context.dm_utm_source,
     ) = await _load_subscriber_tagged_urls_with_product(
         db=db,
         org_id=org_id,

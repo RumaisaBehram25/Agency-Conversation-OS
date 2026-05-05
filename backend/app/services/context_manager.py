@@ -29,6 +29,7 @@ from app.models.campaign_metrics import CampaignMetric
 from app.models.conversation import Conversation
 from app.models.message import Message
 from app.models.subscriber import Subscriber
+from app.services.campaign_utm_resolver import resolve_dm_utm_hints
 from app.schemas.ai_engine import (
     AIResponse,
     ConversationContext,
@@ -163,6 +164,14 @@ async def load_conversation_context(
         hyros_synced_at=subscriber.hyros_synced_at,
     )
 
+    dm_utm_campaign, dm_utm_source = await resolve_dm_utm_hints(
+        db,
+        org_id,
+        str(subscriber.attora_campaign_id)
+        if subscriber.attora_campaign_id
+        else None,
+    )
+
     return ConversationContext(
         org_id=str(org_id),
         conversation_id=str(conversation.id),
@@ -170,6 +179,8 @@ async def load_conversation_context(
         history=history,
         current_message=current_message,
         message_count=conversation.message_count,
+        dm_utm_campaign=dm_utm_campaign,
+        dm_utm_source=dm_utm_source,
     )
 
 

@@ -20,6 +20,7 @@ from app.models.follow_up import CampaignFollowUp
 from app.models.knowledge_document import KnowledgeDocument
 from app.models.ai_usage_event import AIUsageEvent
 from app.models.manychat_event import ManyChatEvent
+from app.models.hyros_sync_log import HyrosSyncLog
 
 __all__ = [
     "Base",
@@ -43,4 +44,5 @@ __all__ = [
     "KnowledgeDocument",
     "AIUsageEvent",
     "ManyChatEvent",
+    "HyrosSyncLog",
 ]

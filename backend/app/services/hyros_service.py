@@ -78,6 +78,9 @@ class HyrosSale:
     first_source_name: str | None
     first_source_tag: str | None
     raw: dict
+    traffic_source: str | None = None
+    creative_name: str | None = None
+    purchase_link: str | None = None
     attora_id: str | None = None
     attora_sub: str | None = None
 
@@ -191,19 +194,137 @@ _ATTORA_ID_PREFIXES = ("attora_id:", "attora_id=", "attora-id:", "attora-id=")
 _ATTORA_SUB_PREFIXES = ("attora_sub:", "attora_sub=", "attora-sub:", "attora-sub=")
 
 
+def _normalize_identity_key(name: str) -> str | None:
+    """Map Hyros field / source names to ``attora_id`` or ``attora_sub``."""
+    n = " ".join(name.strip().split()).lower().replace(" ", "_").replace("-", "_")
+    if n in ("attora_id", "attoraid"):
+        return "attora_id"
+    if n in ("attora_sub", "attorasub"):
+        return "attora_sub"
+    return None
+
+
+def _apply_identity_name_value(
+    attora_id: str | None,
+    attora_sub: str | None,
+    name_raw: Any,
+    value_raw: Any,
+) -> tuple[str | None, str | None]:
+    """Set id/sub from a display name + value pair (e.g. dynamic source rows)."""
+    name_key = _normalize_identity_key(str(name_raw)) if name_raw is not None else None
+    val = _string_from_any(value_raw)
+    if name_key == "attora_id" and attora_id is None and val:
+        attora_id = val
+    elif name_key == "attora_sub" and attora_sub is None and val:
+        attora_sub = val
+    return attora_id, attora_sub
+
+
+def _extract_from_tag_line(
+    attora_id: str | None, attora_sub: str | None, text: str
+) -> tuple[str | None, str | None]:
+    """Parse ``attora_*`` prefix conventions used in tag strings."""
+    cleaned = text.strip()
+    lower = cleaned.lower()
+    if attora_id is None:
+        for prefix in _ATTORA_ID_PREFIXES:
+            if lower.startswith(prefix):
+                attora_id = cleaned[len(prefix) :].strip() or None
+                break
+    if attora_sub is None:
+        for prefix in _ATTORA_SUB_PREFIXES:
+            if lower.startswith(prefix):
+                attora_sub = cleaned[len(prefix) :].strip() or None
+                break
+    return attora_id, attora_sub
+
+
+def _extract_pairs_from_mapping(
+    attora_id: str | None,
+    attora_sub: str | None,
+    item: dict[str, Any],
+) -> tuple[str | None, str | None]:
+    """
+    Pull identity from a Hyros-style row: name/value, key/value, field keys, etc.
+    """
+    for name_key, value_key in (
+        ("name", "value"),
+        ("key", "value"),
+        ("fieldName", "value"),
+        ("fieldName", "parameterValue"),
+        ("name", "parameterValue"),
+        ("parameterName", "parameterValue"),
+        ("label", "value"),
+    ):
+        if name_key in item and value_key in item:
+            attora_id, attora_sub = _apply_identity_name_value(
+                attora_id, attora_sub, item.get(name_key), item.get(value_key)
+            )
+    # Flat keys sometimes present on source objects
+    if attora_id is None:
+        attora_id = _string_from_any(
+            item.get("attora_id") or item.get("attoraId")
+        )
+    if attora_sub is None:
+        attora_sub = _string_from_any(
+            item.get("attora_sub") or item.get("attoraSub")
+        )
+    # Nested parameter bags (URL / dynamic attribution)
+    for nested_key in ("parameters", "params", "utm", "queryParams", "query_parameters"):
+        nested = item.get(nested_key)
+        if isinstance(nested, dict):
+            for nk, vk in nested.items():
+                attora_id, attora_sub = _apply_identity_name_value(
+                    attora_id, attora_sub, nk, vk
+                )
+    return attora_id, attora_sub
+
+
+def _extract_from_object_list(
+    attora_id: str | None,
+    attora_sub: str | None,
+    items: list[Any],
+) -> tuple[str | None, str | None]:
+    """Walk a list of strings (tag-like) or dicts (sources / dynamic rows)."""
+    for item in items:
+        if isinstance(item, str) and item.strip():
+            attora_id, attora_sub = _extract_from_tag_line(attora_id, attora_sub, item)
+        elif isinstance(item, dict):
+            attora_id, attora_sub = _extract_pairs_from_mapping(
+                attora_id, attora_sub, item
+            )
+    return attora_id, attora_sub
+
+
+def _custom_field_like_blocks(raw: dict[str, Any]) -> list[Any]:
+    """Keys Hyros may use for custom fields and dynamic source mirrors."""
+    blocks: list[Any] = []
+    for key in (
+        "customFields",
+        "custom_fields",
+        "customField",
+        "fields",
+        "dynamicSources",
+        "dynamic_sources",
+    ):
+        blocks.append(raw.get(key))
+    return blocks
+
+
 def _extract_attora_identity(
     raw: dict[str, Any], tags: list[str]
 ) -> tuple[str | None, str | None]:
     """
     Pull attora_id / attora_sub off a Hyros lead or sale payload.
 
-    Hyros has to be configured (in their dashboard) to map the URL params
-    `attora_id` and `attora_sub` onto the lead. The two common conventions are:
-      1. As a tag string like `attora_id:<uuid>` or `attora_id=<uuid>`.
-      2. As a custom field — either a `customFields` dict (`{attora_id: "..."}`)
-         or a list of `{name, value}` rows.
+    Hyros may surface these as:
+      1. Tag strings like ``attora_id:<uuid>`` / ``attora_sub=<id>``.
+      2. ``customFields`` / ``dynamicSources`` — dict or list of ``{name, value}``.
+      3. ``sources`` — Hyros \"dynamic source\" rows (URL/query params) as dicts
+         with name/value or nested ``parameters``.
+      4. Top-level ``attoraId`` / ``attoraSub`` on the lead object.
 
-    We accept both so matching works regardless of how the Hyros side is wired.
+    First non-null value wins per field (same precedence as sync matching).
     """
     attora_id: str | None = None
     attora_sub: str | None = None
@@ -211,21 +332,11 @@ def _extract_attora_identity(
     for tag in tags:
         if not isinstance(tag, str):
             continue
-        cleaned = tag.strip()
-        lower = cleaned.lower()
-        if attora_id is None:
-            for prefix in _ATTORA_ID_PREFIXES:
-                if lower.startswith(prefix):
-                    attora_id = cleaned[len(prefix):].strip() or None
-                    break
-        if attora_sub is None:
-            for prefix in _ATTORA_SUB_PREFIXES:
-                if lower.startswith(prefix):
-                    attora_sub = cleaned[len(prefix):].strip() or None
-                    break
+        attora_id, attora_sub = _extract_from_tag_line(attora_id, attora_sub, tag)
 
-    for key in ("customFields", "custom_fields", "customField", "fields"):
-        candidate = raw.get(key)
+    for candidate in _custom_field_like_blocks(raw):
+        if candidate is None:
+            continue
         if isinstance(candidate, dict):
             if attora_id is None:
                 attora_id = _string_from_any(
@@ -235,16 +346,35 @@ def _extract_attora_identity(
                 attora_sub = _string_from_any(
                     candidate.get("attora_sub") or candidate.get("attoraSub")
                 )
+            for dict_key, dict_val in candidate.items():
+                attora_id, attora_sub = _apply_identity_name_value(
+                    attora_id, attora_sub, dict_key, dict_val
+                )
         elif isinstance(candidate, list):
             for item in candidate:
                 if not isinstance(item, dict):
                     continue
-                name = str(item.get("name") or item.get("key") or "").strip().lower()
-                value = _string_from_any(item.get("value"))
-                if name == "attora_id" and attora_id is None:
-                    attora_id = value
-                elif name == "attora_sub" and attora_sub is None:
-                    attora_sub = value
+                value = _string_from_any(
+                    item.get("value") or item.get("parameterValue")
+                )
+                attora_id, attora_sub = _apply_identity_name_value(
+                    attora_id,
+                    attora_sub,
+                    item.get("name") or item.get("key") or item.get("fieldName"),
+                    value,
+                )
+
+    for sources_key in ("sources", "Sources"):
+        src_list = raw.get(sources_key)
+        if isinstance(src_list, list):
+            attora_id, attora_sub = _extract_from_object_list(
+                attora_id, attora_sub, src_list
+            )
+
+    if attora_id is None:
+        attora_id = _string_from_any(raw.get("attora_id") or raw.get("attoraId"))
+    if attora_sub is None:
+        attora_sub = _string_from_any(raw.get("attora_sub") or raw.get("attoraSub"))
 
     return attora_id, attora_sub
 
@@ -352,6 +482,16 @@ class HyrosService:
                         break
 
                 first_source = row.get("firstSource") or {}
+                fs = _extract_source(first_source) if isinstance(first_source, dict) else None
+
+                purchase_link = (
+                    _string_from_any(row.get("link"))
+                    or _string_from_any(row.get("url"))
+                    or _string_from_any(row.get("landingPage"))
+                    or _string_from_any(row.get("landing_page"))
+                    or _string_from_any(row.get("purchaseLink"))
+                    or _string_from_any(row.get("pageUrl"))
+                )
 
                 # Identity lives on the lead sub-object for sales, with the
                 # row itself as a fallback in case Hyros denormalises it.
@@ -372,6 +512,9 @@ class HyrosService:
                         product=product,
                         first_source_name=_string_from_any(first_source.get("name")),
                         first_source_tag=_string_from_any(first_source.get("tag")),
+                        traffic_source=fs.traffic_source if fs else None,
+                        creative_name=fs.creative_name if fs else None,
+                        purchase_link=purchase_link,
                         raw=row,
                         attora_id=attora_id,
                         attora_sub=attora_sub,

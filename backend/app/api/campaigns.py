@@ -40,7 +40,7 @@ from app.schemas.campaign import (
     _slugify,
     generate_utm_urls,
 )
-from app.schemas.campaign import build_utm_url
+from app.utils.dm_links import DmSubscriberView, build_dm_link
 
 router = APIRouter()
 
@@ -307,12 +307,13 @@ async def get_utm_for_subscriber(
     db: AsyncSession = Depends(get_db),
 ) -> CampaignUTMResponse:
     """
-    Return the campaign's UTM URLs with both `attora_sub=<manychat_id>` and
-    `attora_id=<attora_uuid>` appended to each, so the landing page can
-    attribute the conversion back using either identifier.
+    Return the campaign's funnel URLs with DM attribution appended: identity
+    (`attora_sub`, `attora_id` when known) plus UTM medium forced to ``dm``,
+    `utm_source` / `utm_campaign` from the campaign UTM row (merged into any
+    existing query string).
 
-    If the subscriber doesn't exist yet in this org, only `attora_sub` is stamped
-    (no UUID to attach).
+    If the subscriber isn't in this org yet, only identity fields available
+    from the ManyChat id are included (typically `attora_sub` only).
     """
     campaign = await _load_campaign(db, org_id, campaign_id)
     if campaign.utm is None:
@@ -333,12 +334,20 @@ async def get_utm_for_subscriber(
     subscriber_uuid = sub_result.scalar_one_or_none()
 
     utm = campaign.utm
-    extra: dict[str, str] = {"attora_sub": subscriber_id}
-    if subscriber_uuid is not None:
-        extra["attora_id"] = str(subscriber_uuid)
+    sub_view = DmSubscriberView(
+        manychat_subscriber_id=subscriber_id,
+        id=subscriber_uuid,
+    )
 
     def _tag(url: str | None) -> str | None:
-        return build_utm_url(url, extra) if url else None
+        if not url:
+            return None
+        return build_dm_link(
+            url,
+            sub_view,
+            utm.utm_campaign or "",
+            utm.utm_source or "",
+        )
 
     return CampaignUTMResponse(
         id=utm.id,

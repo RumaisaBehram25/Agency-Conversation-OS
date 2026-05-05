@@ -119,6 +119,9 @@ class ConversationContext(BaseModel):
     # URLs pre-stamped with attora_sub=<subscriber_id> so the AI can quote
     # per-lead attribution links. Keys: "product_page", "checkout", "success".
     subscriber_tagged_urls: dict[str, str] = Field(default_factory=dict)
+    # Campaign UTM slug + source for stamping product catalog URLs (medium is always ``dm``).
+    dm_utm_campaign: str | None = None
+    dm_utm_source: str | None = None
     # Product UUID linked to the subscriber's campaign. When set, the prompt
     # builder filters PRODUCT CATALOG to just this product to prevent the AI
     # from cross-pollinating product details across campaigns.

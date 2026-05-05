@@ -7,9 +7,10 @@ and campaign health from DailyAnalytics + raw tables.
 
 import logging
 import uuid
+from collections import defaultdict
 from datetime import date, datetime, timedelta, timezone
 
-from sqlalchemy import func, select, and_, or_, case
+from sqlalchemy import func, select, and_, or_, case, literal
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.analytics import DailyAnalytics
@@ -17,6 +18,7 @@ from app.models.campaign import AdCampaign
 from app.models.campaign_metrics import CampaignMetric
 from app.models.conversation import Conversation
 from app.models.conversion import ConversionEvent
+from app.models.hyros_sync_log import HyrosSyncLog
 from app.models.message import Message
 from app.models.subscriber import Subscriber
 from app.models.base import BuyerStage, ChannelType, ConversationStatus
@@ -25,12 +27,171 @@ from app.schemas.analytics import (
     AnalyticsResponse,
     DailyTrend,
     FunnelStep,
+    HyrosSourceBreakdownRow,
+    HyrosSyncHealthResponse,
+    HyrosSyncRunSummary,
+    PurchasesDailyPoint,
     ROIResponse,
 )
 from app.schemas.dashboard import CampaignHealth
 
 
 logger = logging.getLogger(__name__)
+
+
+def hyros_cost_per_purchase_safe(total_ad_spend: float, purchases_count: int) -> float | None:
+    """Ad spend ÷ synced purchases; None when denominator is zero or spend is non-positive."""
+    if purchases_count > 0 and total_ad_spend > 0:
+        return round(total_ad_spend / purchases_count, 2)
+    return None
+
+
+def hyros_cost_per_conversation_safe(
+    total_ad_spend: float, conversations_count: int
+) -> float | None:
+    """Ad spend ÷ subscribers with conversations started; None when not computable."""
+    if conversations_count > 0 and total_ad_spend > 0:
+        return round(total_ad_spend / conversations_count, 2)
+    return None
+
+
+def hyros_allocate_spend_by_purchase_shares(
+    spend_by_campaign: dict[str, float],
+    purchaser_counts: list[tuple[str, str | None, int]],
+) -> dict[str, float]:
+    """
+    Split campaign-level Meta spend across Hyros traffic buckets by each
+    campaign's purchasers in that bucket (no double-count across buckets).
+    """
+    purch_per_campaign: dict[str, float] = defaultdict(float)
+    for _bucket, camp, n in purchaser_counts:
+        if camp and n > 0:
+            purch_per_campaign[camp] += n
+    out: dict[str, float] = defaultdict(float)
+    for bucket, camp, n in purchaser_counts:
+        if not camp or n <= 0:
+            continue
+        spend = spend_by_campaign.get(camp, 0.0)
+        if spend <= 0:
+            continue
+        total = purch_per_campaign.get(camp, 0.0)
+        if total <= 0:
+            continue
+        out[bucket] += spend * (n / total)
+    return dict(out)
+
+
+def hyros_traffic_bucket_to_api_source(bucket_key: str) -> str | None:
+    """Map internal bucket key to API traffic_source (organic → None)."""
+    return None if bucket_key == "organic" else bucket_key
+
+
+def _hyros_subscriber_traffic_bucket_sql():
+    """SQL label 'organic' vs trimmed hyros_traffic_source (blank/NULL → organic)."""
+    clean = func.nullif(func.trim(Subscriber.hyros_traffic_source), "")
+    return case((clean.is_(None), literal("organic")), else_=clean)
+
+
+def build_purchases_over_time_buckets(
+    counts_by_day: dict[date, int],
+    date_from: date,
+    date_to: date,
+) -> list[PurchasesDailyPoint]:
+    """Emit one row per calendar day in [date_from, date_to]; missing keys → purchases=0."""
+    out: list[PurchasesDailyPoint] = []
+    cur = date_from
+    while cur <= date_to:
+        out.append(PurchasesDailyPoint(date=cur, purchases=int(counts_by_day.get(cur, 0))))
+        cur += timedelta(days=1)
+    return out
+
+
+def hyros_synced_purchase_where(
+    *,
+    org_id: uuid.UUID,
+    date_from_bound: datetime,
+    date_to_bound: datetime,
+    channel: str | None,
+    campaign_id: str | None,
+    attora_campaign_id: uuid.UUID | None,
+    source_type: str | None,
+) -> list:
+    """WHERE fragments for subscribers counted by hyros_synced_at (Hyros purchases)."""
+    filters = [
+        Subscriber.org_id == org_id,
+        Subscriber.hyros_purchased.is_(True),
+        Subscriber.hyros_synced_at.isnot(None),
+        Subscriber.hyros_synced_at >= date_from_bound,
+        Subscriber.hyros_synced_at <= date_to_bound,
+    ]
+    if channel and channel != "all":
+        try:
+            filters.append(Subscriber.channel == ChannelType(channel))
+        except ValueError:
+            pass
+    sub_clause = _subscriber_campaign_clause(
+        campaign_id, attora_campaign_id, org_id=org_id, source_type=source_type
+    )
+    if sub_clause is not None:
+        filters.append(sub_clause)
+    return filters
+
+
+async def hyros_fetch_synced_purchase_counts_by_calendar_day(
+    db: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    date_from: date,
+    date_to: date,
+    channel: str | None,
+    campaign_id: str | None,
+    attora_campaign_id: uuid.UUID | None,
+    source_type: str | None,
+) -> dict[date, int]:
+    """Grouped counts by calendar day (DB date of hyros_synced_at); sparse dict."""
+    dt_from = datetime(date_from.year, date_from.month, date_from.day, tzinfo=timezone.utc)
+    dt_to = datetime(date_to.year, date_to.month, date_to.day, 23, 59, 59, tzinfo=timezone.utc)
+    filters = hyros_synced_purchase_where(
+        org_id=org_id,
+        date_from_bound=dt_from,
+        date_to_bound=dt_to,
+        channel=channel,
+        campaign_id=campaign_id,
+        attora_campaign_id=attora_campaign_id,
+        source_type=source_type,
+    )
+    bucket = func.date(Subscriber.hyros_synced_at)
+    result = await db.execute(
+        select(bucket.label("d"), func.count().label("c"))
+        .select_from(Subscriber)
+        .where(*filters)
+        .group_by(bucket)
+    )
+    return {row.d: int(row.c) for row in result.all()}
+
+
+async def hyros_compute_purchases_over_time(
+    db: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    date_from: date,
+    date_to: date,
+    channel: str | None,
+    campaign_id: str | None,
+    attora_campaign_id: uuid.UUID | None,
+    source_type: str | None,
+) -> list[PurchasesDailyPoint]:
+    counts = await hyros_fetch_synced_purchase_counts_by_calendar_day(
+        db,
+        org_id=org_id,
+        date_from=date_from,
+        date_to=date_to,
+        channel=channel,
+        campaign_id=campaign_id,
+        attora_campaign_id=attora_campaign_id,
+        source_type=source_type,
+    )
+    return build_purchases_over_time_buckets(counts, date_from, date_to)
 
 
 def _campaigns_of_source_type_subquery(org_id: uuid.UUID, source_type: str):
@@ -286,23 +447,33 @@ async def get_analytics(
     )
     qualified_count = qualified_result.scalar() or 0
 
-    hyros_filters = [
-        Subscriber.org_id == org_id,
-        Subscriber.hyros_purchased.is_(True),
-        Subscriber.created_at >= dt_from,
-        Subscriber.created_at <= dt_to,
-    ]
-    hyros_sub_clause = _subscriber_campaign_clause(
-        campaign_id, attora_campaign_id, org_id=org_id, source_type=source_type
+    purchases_over_time = await hyros_compute_purchases_over_time(
+        db,
+        org_id=org_id,
+        date_from=date_from,
+        date_to=date_to,
+        channel=channel,
+        campaign_id=campaign_id,
+        attora_campaign_id=attora_campaign_id,
+        source_type=source_type,
     )
-    if hyros_sub_clause is not None:
-        hyros_filters.append(hyros_sub_clause)
-    hyros_purchases_result = await db.execute(
-        select(func.count())
-        .select_from(Subscriber)
-        .where(*hyros_filters)
+    purchases_count = sum(p.purchases for p in purchases_over_time)
+    hyros_confirmed_purchases = purchases_count
+
+    conversations_count = await _count_distinct_subscribers_conversation_started_in_range(
+        db,
+        org_id,
+        dt_from,
+        dt_to,
+        channel,
+        campaign_id,
+        attora_campaign_id,
+        source_type,
     )
-    hyros_confirmed_purchases = hyros_purchases_result.scalar() or 0
+    cost_per_purchase = hyros_cost_per_purchase_safe(total_ad_spend, purchases_count)
+    cost_per_conversation = hyros_cost_per_conversation_safe(
+        total_ad_spend, conversations_count
+    )
 
     # Compute CPQC: ad_spend / qualified_conversations.
     # When a campaign is explicitly selected, $0 spend with qualified > 0 is a
@@ -349,6 +520,11 @@ async def get_analytics(
         avg_response_time_ms=avg_response_time_ms,
         qualification_rate=qualification_rate,
         hyros_confirmed_purchases=hyros_confirmed_purchases,
+        cost_per_purchase=cost_per_purchase,
+        cost_per_conversation=cost_per_conversation,
+        purchases_count=purchases_count,
+        conversations_count=conversations_count,
+        purchases_over_time=purchases_over_time,
         total_conversations=total_conversations,
         total_conversions=total_conversions,
         total_revenue=total_revenue,
@@ -878,6 +1054,69 @@ async def _count_conversations_raw(
     return int(result.scalar() or 0)
 
 
+async def _count_purchases_hyros_synced_in_range(
+    db: AsyncSession,
+    org_id: uuid.UUID,
+    dt_from: datetime,
+    dt_to: datetime,
+    channel: str | None,
+    campaign_id: str | None,
+    attora_campaign_id: uuid.UUID | None,
+    source_type: str | None,
+) -> int:
+    """Subscribers with Hyros sync in [dt_from, dt_to]; same definition as purchases_count."""
+    counts = await hyros_fetch_synced_purchase_counts_by_calendar_day(
+        db,
+        org_id=org_id,
+        date_from=dt_from.date(),
+        date_to=dt_to.date(),
+        channel=channel,
+        campaign_id=campaign_id,
+        attora_campaign_id=attora_campaign_id,
+        source_type=source_type,
+    )
+    return sum(counts.values())
+
+
+async def _count_distinct_subscribers_conversation_started_in_range(
+    db: AsyncSession,
+    org_id: uuid.UUID,
+    dt_from: datetime,
+    dt_to: datetime,
+    channel: str | None,
+    campaign_id: str | None,
+    attora_campaign_id: uuid.UUID | None,
+    source_type: str | None,
+) -> int:
+    """Distinct subscribers with at least one conversation started in range."""
+    conv_start = func.coalesce(Conversation.started_at, Conversation.created_at)
+    where_clauses = [
+        Conversation.org_id == org_id,
+        Subscriber.org_id == org_id,
+        conv_start >= dt_from,
+        conv_start <= dt_to,
+    ]
+    if channel and channel != "all":
+        try:
+            where_clauses.append(Conversation.channel == ChannelType(channel))
+        except ValueError:
+            pass
+
+    sub_clause = _subscriber_campaign_clause(
+        campaign_id, attora_campaign_id, org_id=org_id, source_type=source_type
+    )
+    if sub_clause is not None:
+        where_clauses.append(sub_clause)
+
+    result = await db.execute(
+        select(func.count(func.distinct(Conversation.subscriber_id)))
+        .select_from(Conversation)
+        .join(Subscriber, Subscriber.id == Conversation.subscriber_id)
+        .where(*where_clauses)
+    )
+    return int(result.scalar() or 0)
+
+
 async def _count_conversations_for_campaign(
     db: AsyncSession,
     org_id: uuid.UUID,
@@ -1195,3 +1434,175 @@ async def get_analytics_export_data(
         })
 
     return export_data
+
+
+async def get_hyros_source_breakdown(
+    db: AsyncSession,
+    org_id: uuid.UUID,
+    date_from: date,
+    date_to: date,
+    channel: str | None = None,
+) -> list[HyrosSourceBreakdownRow]:
+    """
+    Per Hyros traffic-source bucket (NULL/blank → organic): purchases,
+    conversations, and campaign spend allocated from Meta facts via purchaser×campaign shares.
+    """
+    dt_from = datetime(date_from.year, date_from.month, date_from.day, tzinfo=timezone.utc)
+    dt_to = datetime(date_to.year, date_to.month, date_to.day, 23, 59, 59, tzinfo=timezone.utc)
+
+    purchase_filters = hyros_synced_purchase_where(
+        org_id=org_id,
+        date_from_bound=dt_from,
+        date_to_bound=dt_to,
+        channel=channel,
+        campaign_id=None,
+        attora_campaign_id=None,
+        source_type=None,
+    )
+    bucket_sql = _hyros_subscriber_traffic_bucket_sql()
+
+    purch_stmt = (
+        select(
+            bucket_sql.label("bucket"),
+            Subscriber.campaign_id,
+            func.count().label("n"),
+        )
+        .select_from(Subscriber)
+        .where(*purchase_filters)
+        .group_by(bucket_sql, Subscriber.campaign_id)
+    )
+    purch_rows_raw = await db.execute(purch_stmt)
+
+    purchaser_tuples: list[tuple[str, str | None, int]] = []
+    purchases_by_bucket: dict[str, int] = defaultdict(int)
+    for row in purch_rows_raw.all():
+        bkt = row.bucket
+        camp = row.campaign_id
+        n = int(row.n)
+        purchaser_tuples.append((bkt, camp, n))
+        purchases_by_bucket[bkt] += n
+
+    conv_start = func.coalesce(Conversation.started_at, Conversation.created_at)
+    conv_where = [
+        Conversation.org_id == org_id,
+        Subscriber.org_id == org_id,
+        conv_start >= dt_from,
+        conv_start <= dt_to,
+    ]
+    if channel and channel != "all":
+        try:
+            conv_where.append(Conversation.channel == ChannelType(channel))
+        except ValueError:
+            pass
+
+    conv_stmt = (
+        select(
+            bucket_sql.label("bucket"),
+            func.count(func.distinct(Conversation.subscriber_id)).label("c"),
+        )
+        .select_from(Conversation)
+        .join(Subscriber, Subscriber.id == Conversation.subscriber_id)
+        .where(*conv_where)
+        .group_by(bucket_sql)
+    )
+    conv_rows = await db.execute(conv_stmt)
+    conv_by_bucket: dict[str, int] = {}
+    for row in conv_rows.all():
+        conv_by_bucket[row.bucket] = int(row.c)
+
+    spend_stmt = (
+        select(
+            CampaignMetric.meta_campaign_id,
+            func.coalesce(func.sum(CampaignMetric.spend), 0).label("spend"),
+        )
+        .where(
+            CampaignMetric.org_id == org_id,
+            CampaignMetric.date >= date_from,
+            CampaignMetric.date <= date_to,
+            CampaignMetric.level == "campaign",
+            CampaignMetric.meta_campaign_id.isnot(None),
+        )
+        .group_by(CampaignMetric.meta_campaign_id)
+    )
+    spend_rows = await db.execute(spend_stmt)
+    spend_by_campaign = {
+        str(row.meta_campaign_id): float(row.spend) for row in spend_rows.all()
+    }
+
+    allocated_raw = hyros_allocate_spend_by_purchase_shares(spend_by_campaign, purchaser_tuples)
+
+    all_buckets = set(purchases_by_bucket) | set(conv_by_bucket)
+    rows_out: list[HyrosSourceBreakdownRow] = []
+    for bkey in sorted(all_buckets, key=lambda k: (-purchases_by_bucket.get(k, 0), k)):
+        pcount = purchases_by_bucket.get(bkey, 0)
+        ccount = conv_by_bucket.get(bkey, 0)
+        raw_alloc = allocated_raw.get(bkey, 0.0)
+        ad_spend = round(raw_alloc, 2) if raw_alloc > 0 else None
+        spend_num = raw_alloc if raw_alloc > 0 else 0.0
+        rows_out.append(
+            HyrosSourceBreakdownRow(
+                traffic_source=hyros_traffic_bucket_to_api_source(bkey),
+                purchases_count=pcount,
+                conversations_count=ccount,
+                ad_spend=ad_spend,
+                cost_per_purchase=hyros_cost_per_purchase_safe(spend_num, pcount),
+                cost_per_conversation=hyros_cost_per_conversation_safe(spend_num, ccount),
+            )
+        )
+
+    return rows_out
+
+
+async def get_hyros_sync_health(
+    db: AsyncSession,
+    org_id: uuid.UUID,
+    *,
+    last_n: int = 10,
+) -> HyrosSyncHealthResponse:
+    """Last N Hyros sync audit rows for an org with purchase match rate per run."""
+    last_n = max(1, min(int(last_n), 50))
+    result = await db.execute(
+        select(HyrosSyncLog)
+        .where(HyrosSyncLog.org_id == org_id)
+        .order_by(HyrosSyncLog.synced_at.desc())
+        .limit(last_n)
+    )
+    rows = list(result.scalars().all())
+
+    sync_runs: list[HyrosSyncRunSummary] = []
+    rates: list[float] = []
+    for row in rows:
+        match_rate_pct = (
+            round(100.0 * row.purchases_matched / row.sales_scanned, 2)
+            if row.sales_scanned > 0
+            else None
+        )
+        attora_id_signal_pct = (
+            round(100.0 * row.matched_by_attora_id / row.sales_scanned, 2)
+            if row.sales_scanned > 0
+            else None
+        )
+        if match_rate_pct is not None:
+            rates.append(match_rate_pct)
+        sync_runs.append(
+            HyrosSyncRunSummary(
+                synced_at=row.synced_at,
+                sales_scanned=row.sales_scanned,
+                purchases_matched=row.purchases_matched,
+                unmatched_sales=row.unmatched_sales,
+                matched_by_attora_id=row.matched_by_attora_id,
+                matched_by_attora_sub=row.matched_by_attora_sub,
+                matched_by_email=row.matched_by_email,
+                match_rate_pct=match_rate_pct,
+                attora_id_signal_pct=attora_id_signal_pct,
+            )
+        )
+
+    avg_match_rate = round(sum(rates) / len(rates), 2) if rates else None
+    last_synced_at = rows[0].synced_at if rows else None
+
+    return HyrosSyncHealthResponse(
+        sync_runs=sync_runs,
+        avg_match_rate=avg_match_rate,
+        last_synced_at=last_synced_at,
+    )

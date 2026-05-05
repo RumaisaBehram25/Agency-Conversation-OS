@@ -30,6 +30,10 @@ from app.schemas.analytics import (
     AnalyticsResponse,
     DailyTrend,
     FunnelStep,
+    HyrosSourceBreakdownRow,
+    HyrosSyncHealthResponse,
+    HyrosSyncRunSummary,
+    PurchasesDailyPoint,
     ROIResponse,
 )
 from app.schemas.dashboard import (
@@ -65,6 +69,10 @@ __all__ = [
     "AnalyticsResponse",
     "DailyTrend",
     "FunnelStep",
+    "HyrosSourceBreakdownRow",
+    "HyrosSyncHealthResponse",
+    "HyrosSyncRunSummary",
+    "PurchasesDailyPoint",
     "ROIResponse",
     "CampaignHealth",
     "DashboardOverviewResponse",

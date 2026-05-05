@@ -24,7 +24,12 @@ from app.database import get_db
 from app.models.organization import Organization
 from app.models.manychat_event import ManyChatEvent
 from app.redis import get_redis_pool
-from app.schemas.manychat import ManyChatWebhookRequest, ManyChatWebhookResponse
+from app.schemas.manychat import (
+    ManyChatResponseContent,
+    ManyChatTextMessage,
+    ManyChatWebhookRequest,
+    ManyChatWebhookResponse,
+)
 from app.security.encryption import decrypt_value
 from app.services.ai_engine import process_message
 from app.services.fallback import FallbackType, get_fallback_manychat_response
@@ -171,6 +176,19 @@ async def manychat_webhook(
     subscriber_id = request.subscriber.id
     message = request.last_input_text
     channel = request.channel
+
+    # Blank-only input should not invoke the AI pipeline (ManyChat can fire External
+    # Request before the subscriber types).
+    if not (message or "").strip():
+        return ManyChatWebhookResponse(
+            content=ManyChatResponseContent(
+                messages=[
+                    ManyChatTextMessage(
+                        text="Please send a message so I can help you 🙂"
+                    )
+                ]
+            )
+        )
     flow_id = (request.flow_id or "").strip()
 
     # Extract custom fields as dict

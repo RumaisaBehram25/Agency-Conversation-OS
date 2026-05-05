@@ -78,6 +78,8 @@ async def generate_response(
         attora_id=context.subscriber.attora_id,
         campaign_product_id=context.campaign_product_id,
         attora_campaign_id=context.subscriber.attora_campaign_id,
+        dm_utm_campaign=context.dm_utm_campaign,
+        dm_utm_source=context.dm_utm_source,
     )
     user_message = build_user_message(context)
 

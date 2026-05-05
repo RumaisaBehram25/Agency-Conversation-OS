@@ -1,14 +1,15 @@
-"""Daily Hyros lead sync job."""
+"""Hyros purchase + lead sync job (cron or manual)."""
 
 from __future__ import annotations
 
 import logging
+import uuid
 from datetime import datetime, timezone
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.config import settings
+from app.models.hyros_sync_log import HyrosSyncLog
 from app.models.organization import Organization
 from app.models.subscriber import Subscriber
 from app.security.encryption import decrypt_value
@@ -22,6 +23,64 @@ def _subscriber_full_name(subscriber: Subscriber) -> str | None:
     if not parts:
         return None
     return " ".join(parts)
+
+
+def _sale_stable_id(sale: HyrosSale) -> str:
+    """Idempotent key for a Hyros sale row within an org (for unmatched logging)."""
+    if sale.id:
+        return f"sale_id:{sale.id}"
+    if sale.order_id:
+        return f"order:{sale.order_id}"
+    if sale.lead_id and sale.created_at:
+        return f"lead:{sale.lead_id}:{sale.created_at.isoformat()}"
+    return (
+        f"fallback:{sale.lead_email}:{sale.product}:"
+        f"{sale.created_at.isoformat() if sale.created_at else 'none'}"
+    )
+
+
+async def _persist_hyros_sync_log(
+    db: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    synced_at: datetime,
+    sales_scanned: int,
+    purchases_matched: int,
+    unmatched_sales: int,
+    matched_by_attora_id: int,
+    matched_by_attora_sub: int,
+    matched_by_email: int,
+) -> None:
+    """Append one audit row for a completed org sync (caller commits)."""
+    db.add(
+        HyrosSyncLog(
+            org_id=org_id,
+            synced_at=synced_at,
+            sales_scanned=sales_scanned,
+            purchases_matched=purchases_matched,
+            unmatched_sales=unmatched_sales,
+            matched_by_attora_id=matched_by_attora_id,
+            matched_by_attora_sub=matched_by_attora_sub,
+            matched_by_email=matched_by_email,
+        )
+    )
+
+
+def _resolve_org_hyros_api_key(org: Organization) -> tuple[str | None, str | None]:
+    """
+    Return (decrypted_api_key, skip_reason) for Hyros sync.
+    Only the org-level key is used (no shared env fallback — multi-tenant safe).
+    """
+    if org.hyros_api_key is None or not str(org.hyros_api_key).strip():
+        return None, "no_api_key"
+    try:
+        key = decrypt_value(org.hyros_api_key).strip()
+    except Exception:
+        logger.warning("Failed to decrypt hyros_api_key for org=%s", org.id)
+        return None, "decrypt_failed"
+    if not key:
+        return None, "empty_api_key"
+    return key, None
 
 
 def _apply_lead_to_subscriber(subscriber: Subscriber, lead: HyrosLead, *, now: datetime) -> bool:
@@ -65,27 +124,9 @@ async def _sync_hyros_for_org(
     orgs share an API key) and the user-facing manual sync (which calls this
     standalone for one org).
 
-    Returns per-org counts. Caller is responsible for db.commit().
+    Returns per-org counts.     Caller is responsible for db.commit().
     """
-    api_key = settings.hyros_api_key or None
-    if not api_key and org.hyros_api_key:
-        try:
-            api_key = decrypt_value(org.hyros_api_key)
-        except Exception:
-            logger.warning("Failed to decrypt hyros_api_key for org=%s", org.id)
-            return {
-                "subscribers_scanned": 0,
-                "sales_scanned": 0,
-                "matched_by_email": 0,
-                "matched_by_name": 0,
-                "matched_by_origin_lead": 0,
-                "total_matched": 0,
-                "purchases_found": 0,
-                "unmatched_hyros_leads": 0,
-                "skipped": True,
-                "skip_reason": "decrypt_failed",
-            }
-
+    api_key, skip_reason = _resolve_org_hyros_api_key(org)
     if not api_key:
         return {
             "subscribers_scanned": 0,
@@ -96,8 +137,9 @@ async def _sync_hyros_for_org(
             "total_matched": 0,
             "purchases_found": 0,
             "unmatched_hyros_leads": 0,
+            "unmatched_sales": 0,
             "skipped": True,
-            "skip_reason": "no_api_key",
+            "skip_reason": skip_reason or "no_api_key",
         }
 
     # Use shared caches when present (bulk cron path), otherwise fetch fresh.
@@ -126,6 +168,7 @@ async def _sync_hyros_for_org(
     matched_by_origin_lead = 0
     purchases_found = 0
     total_matched = 0
+    matched_sale_ids: set[str] = set()
 
     subs_result = await db.execute(
         select(Subscriber).where(Subscriber.org_id == org.id)
@@ -185,7 +228,18 @@ async def _sync_hyros_for_org(
             subscriber.hyros_origin_tag = (
                 sale_match.first_source_tag or subscriber.hyros_origin_tag
             )
+            subscriber.hyros_traffic_source = (
+                sale_match.traffic_source
+                or sale_match.first_source_name
+                or subscriber.hyros_traffic_source
+            )
+            subscriber.hyros_creative_name = (
+                sale_match.creative_name
+                or sale_match.first_source_tag
+                or subscriber.hyros_creative_name
+            )
             subscriber.hyros_synced_at = now
+            matched_sale_ids.add(_sale_stable_id(sale_match))
             purchases_found += 1
             total_matched += 1
             if sale_match.lead_id:
@@ -222,6 +276,38 @@ async def _sync_hyros_for_org(
 
     unmatched_hyros_leads = max(0, len(leads) - len(local_matched))
 
+    unmatched_sales = 0
+    for sale in sales:
+        sid = _sale_stable_id(sale)
+        if sid in matched_sale_ids:
+            continue
+        unmatched_sales += 1
+        link_preview = (sale.purchase_link or "")[:240]
+        attora_id_log = sale.attora_id if sale.attora_id else None
+        logger.warning(
+            "[hyros] unmatched purchase org_id=%s sale_key=%s email=%s attora_id_on_sale=%s attora_sub=%s "
+            "product=%s link=%s",
+            org.id,
+            sid,
+            sale.lead_email,
+            attora_id_log,
+            sale.attora_sub,
+            sale.product,
+            link_preview or None,
+        )
+
+    await _persist_hyros_sync_log(
+        db,
+        org_id=org.id,
+        synced_at=now,
+        sales_scanned=len(sales),
+        purchases_matched=purchases_found,
+        unmatched_sales=unmatched_sales,
+        matched_by_attora_id=matched_by_attora_id,
+        matched_by_attora_sub=matched_by_attora_sub,
+        matched_by_email=matched_by_email,
+    )
+
     return {
         "subscribers_scanned": subscribers_scanned,
         "sales_scanned": len(sales),
@@ -233,12 +319,13 @@ async def _sync_hyros_for_org(
         "total_matched": total_matched,
         "purchases_found": purchases_found,
         "unmatched_hyros_leads": unmatched_hyros_leads,
+        "unmatched_sales": unmatched_sales,
         "skipped": False,
     }
 
 
 async def sync_hyros_purchases(db: AsyncSession) -> dict:
-    """Pull Hyros sales and leads for every org, then update subscribers."""
+    """Pull Hyros sales and leads for every org with a Hyros key, then update subscribers."""
     orgs_result = await db.execute(select(Organization))
     orgs = orgs_result.scalars().all()
 
@@ -257,6 +344,10 @@ async def sync_hyros_purchases(db: AsyncSession) -> dict:
     matched_by_origin_lead = 0
     purchases_found = 0
     total_matched = 0
+    unmatched_sales_total = 0
+    orgs_skipped_no_api_key = 0
+    orgs_decrypt_failed = 0
+    orgs_synced = 0
 
     for org in orgs:
         org_summary = await _sync_hyros_for_org(
@@ -269,7 +360,16 @@ async def sync_hyros_purchases(db: AsyncSession) -> dict:
             matched_lead_ids=matched_lead_ids,
         )
         if org_summary.get("skipped"):
+            reason = org_summary.get("skip_reason") or ""
+            if reason == "decrypt_failed":
+                orgs_decrypt_failed += 1
+            elif reason in ("no_api_key", "empty_api_key"):
+                orgs_skipped_no_api_key += 1
+            else:
+                logger.warning("Unexpected hyros skip_reason=%s org=%s", reason, org.id)
+                orgs_skipped_no_api_key += 1
             continue
+        orgs_synced += 1
         subscribers_scanned += org_summary["subscribers_scanned"]
         sales_scanned += org_summary["sales_scanned"]
         matched_by_attora_id += org_summary.get("matched_by_attora_id", 0)
@@ -279,6 +379,7 @@ async def sync_hyros_purchases(db: AsyncSession) -> dict:
         matched_by_origin_lead += org_summary["matched_by_origin_lead"]
         purchases_found += org_summary["purchases_found"]
         total_matched += org_summary["total_matched"]
+        unmatched_sales_total += org_summary.get("unmatched_sales", 0)
 
     unmatched_hyros_leads = sum(
         max(0, len(leads) - len(matched_lead_ids.get(api_key, set())))
@@ -286,7 +387,13 @@ async def sync_hyros_purchases(db: AsyncSession) -> dict:
     )
 
     return {
+        "orgs_total": len(orgs),
         "orgs_scanned": len(orgs),
+        "orgs_synced": orgs_synced,
+        # Alias for dashboards / cron checklists (`orgs_skipped_no_api_key` is the canonical name).
+        "orgs_skipped": orgs_skipped_no_api_key,
+        "orgs_skipped_no_api_key": orgs_skipped_no_api_key,
+        "orgs_decrypt_failed": orgs_decrypt_failed,
         "subscribers_scanned": subscribers_scanned,
         "sales_scanned": sales_scanned,
         "matched_by_attora_id": matched_by_attora_id,
@@ -296,6 +403,8 @@ async def sync_hyros_purchases(db: AsyncSession) -> dict:
         "matched_by_origin_lead": matched_by_origin_lead,
         "total_matched": total_matched,
         "purchases_found": purchases_found,
+        "purchases_matched_to_subscribers": purchases_found,
+        "unmatched_sales": unmatched_sales_total,
         "unmatched_hyros_leads": unmatched_hyros_leads,
     }
 

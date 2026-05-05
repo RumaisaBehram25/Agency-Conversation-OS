@@ -6,6 +6,8 @@ GET  /api/analytics/roi                   — Cost and revenue metrics
 GET  /api/analytics/ai-performance        — AI metrics
 GET  /api/analytics/organic-keyword-stats — Keyword-filtered organic counts
 GET  /api/analytics/export                — CSV download
+GET  /api/analytics/hyros-sync-health     — Hyros sync audit + match rates
+GET  /api/analytics/hyros-source-breakdown — CPP/CPC by Hyros traffic_source
 """
 
 import csv
@@ -13,7 +15,7 @@ import io
 import uuid
 from datetime import date, timedelta
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -22,6 +24,8 @@ from app.models.user import User
 from app.schemas.analytics import (
     AIPerformanceResponse,
     AnalyticsResponse,
+    HyrosSourceBreakdownRow,
+    HyrosSyncHealthResponse,
     OrganicKeywordStatsResponse,
     ROIResponse,
 )
@@ -29,6 +33,8 @@ from app.services.analytics_service import (
     get_ai_performance,
     get_analytics,
     get_analytics_export_data,
+    get_hyros_source_breakdown,
+    get_hyros_sync_health,
     get_organic_keyword_stats,
     get_roi,
 )
@@ -65,7 +71,8 @@ async def analytics_overview(
     """
     Get aggregated analytics metrics for a date range.
 
-    Returns CPQC, CCR, avg response time, qualification rate,
+    Returns CPQC, CCR, Hyros purchase series (`purchases_over_time`), cost-per-purchase
+    / cost-per-conversation (same spend source as other tiles), avg response time, qualification rate,
     funnel data, and daily trends. When campaign_id is provided,
     CPQC is scoped to that campaign plus organic (no-attribution)
     qualifications, with organic counted at $0 spend.
@@ -147,6 +154,48 @@ async def analytics_organic_keyword_stats(
     """
     stats = await get_organic_keyword_stats(db, org_id, date_from, date_to, keyword)
     return OrganicKeywordStatsResponse(**stats)
+
+
+@router.get("/hyros-sync-health", response_model=HyrosSyncHealthResponse)
+async def analytics_hyros_sync_health(
+    current_user: User = Depends(get_current_user),
+    org_id: uuid.UUID = Depends(get_org_id),
+    db: AsyncSession = Depends(get_db),
+    limit: int = Query(10, ge=1, le=50, description="Recent sync rows to return"),
+) -> HyrosSyncHealthResponse:
+    """
+    Recent Hyros sync runs for the current user's org (JWT org scope).
+
+    Returns match rate (purchases_matched ÷ sales_scanned) per run plus averages.
+    Org is resolved from membership, not from a query `org_id` parameter.
+    """
+    return await get_hyros_sync_health(db, org_id, last_n=limit)
+
+
+@router.get("/hyros-source-breakdown", response_model=list[HyrosSourceBreakdownRow])
+async def analytics_hyros_source_breakdown(
+    current_user: User = Depends(get_current_user),
+    org_id: uuid.UUID = Depends(get_org_id),
+    db: AsyncSession = Depends(get_db),
+    dt_from: date = Query(..., description="Range start (UTC date)"),
+    dt_to: date = Query(..., description="Range end (UTC date, inclusive)"),
+    channel: str | None = Query(
+        None,
+        description="Subscriber / conversation channel filter (e.g. instagram), or omit for all",
+    ),
+) -> list[HyrosSourceBreakdownRow]:
+    """
+    Cost and volume by `subscribers.hyros_traffic_source` (blank → organic).
+
+    Spend is taken from `campaign_metrics` (campaign level) in the same date
+    window, split across buckets by each Meta campaign's Hyros-synced purchaser mix.
+    """
+    if dt_from > dt_to:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="dt_from must be on or before dt_to",
+        )
+    return await get_hyros_source_breakdown(db, org_id, dt_from, dt_to, channel)
 
 
 @router.get("/export")

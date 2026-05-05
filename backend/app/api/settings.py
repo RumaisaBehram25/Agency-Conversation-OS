@@ -186,7 +186,7 @@ async def hyros_sync_now(
 
     if result.get("skipped"):
         reason = result.get("skip_reason")
-        if reason == "no_api_key":
+        if reason in ("no_api_key", "empty_api_key"):
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="No Hyros API key configured for this organization.",

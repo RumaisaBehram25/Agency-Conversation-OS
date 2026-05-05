@@ -12,7 +12,7 @@ import json
 import logging
 
 from app.schemas.ai_engine import ConversationContext, OrgConfig
-from app.schemas.campaign import build_utm_url
+from app.utils.dm_links import DmSubscriberView, build_dm_link
 
 logger = logging.getLogger(__name__)
 
@@ -198,6 +198,8 @@ def build_system_prompt(
     attora_id: str | None = None,
     campaign_product_id: str | None = None,
     attora_campaign_id: str | None = None,
+    dm_utm_campaign: str | None = None,
+    dm_utm_source: str | None = None,
 ) -> list[dict]:
     """
     Build the system prompt as a list of content blocks for Claude.
@@ -219,17 +221,17 @@ def build_system_prompt(
     """
     subscriber_urls = subscriber_urls or {}
 
-    # Identity params we stamp onto ANY URL the AI will quote so the landing
-    # page can attribute back. Empty if we don't have a subscriber context.
-    identity_stamp: dict[str, str] = {}
-    if subscriber_id:
-        identity_stamp["attora_sub"] = subscriber_id
-    if attora_id:
-        identity_stamp["attora_id"] = attora_id
-
     def _stamp_product_url(url: str) -> str:
-        """Add attora_sub + attora_id to a product-specific URL."""
-        return build_utm_url(url, identity_stamp) if identity_stamp else url
+        """Same DM attribution as tagged campaign URLs (UTM medium fixed to ``dm``)."""
+        if not (subscriber_id or attora_id):
+            return url
+        view = DmSubscriberView.from_strings(subscriber_id, attora_id)
+        return build_dm_link(
+            url,
+            view,
+            dm_utm_campaign or "",
+            dm_utm_source or "",
+        )
     sections: list[str] = []
 
     # Section 1: Base Persona
@@ -298,9 +300,9 @@ def build_system_prompt(
         product_knowledge_parts.append(
             "\n### ATTRIBUTION LINKS:\n"
             "When you share a checkout or product URL with this lead, ALWAYS use "
-            "the exact URL provided above (including the `attora_sub` query "
-            "parameter). These URLs attribute the conversion back to this "
-            "specific subscriber — do not shorten, modify, or strip query params."
+            "the exact URL provided above (including `attora_sub`, `attora_id` "
+            "when present, and UTM query params including medium ``dm``. "
+            "Do not shorten, modify, or strip query params."
         )
 
     if product_knowledge_parts:

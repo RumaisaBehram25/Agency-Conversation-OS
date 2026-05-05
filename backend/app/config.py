@@ -98,6 +98,10 @@ class Settings(BaseSettings):
     olap_scheduler_parity_cron: str = "50 1 * * *"
     olap_scheduler_parity_org_ids: str = ""
 
+    # ── Hyros purchase sync (multi-tenant; org-level hyros_api_key only) ──
+    hyros_sync_scheduler_enabled: bool = False
+    hyros_sync_scheduler_cron: str = "0 */3 * * *"
+
     @property
     def cors_origins_list(self) -> list[str]:
         """Parse CORS origins from comma-separated string."""

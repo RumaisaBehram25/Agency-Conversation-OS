@@ -18,6 +18,11 @@ async def test_ensure_tables_ready_throttles_partition_sync(monkeypatch):
     monkeypatch.setattr(olap_service.settings, "olap_partition_refresh_interval_seconds", 300)
     monkeypatch.setattr(olap_service, "_execute_queries", fake_execute_queries)
 
+    async def skip_catalog_ready():
+        return None
+
+    monkeypatch.setattr(olap_service, "_ensure_catalog_ready", skip_catalog_ready)
+
     olap_service._CATALOG_READY = False
     olap_service._PARTITION_LAST_SYNC.clear()
 

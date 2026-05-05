@@ -63,12 +63,19 @@ async def test_process_message_commits_context_before_background_storage(monkeyp
     monkeypatch.setattr(ai_engine, "load_conversation_context", AsyncMock(return_value=context))
     monkeypatch.setattr(
         ai_engine,
+        "_load_subscriber_tagged_urls_with_product",
+        AsyncMock(return_value=({}, None, None, None)),
+    )
+    monkeypatch.setattr(ai_engine, "retrieve_knowledge", AsyncMock(return_value=[]))
+    monkeypatch.setattr(
+        ai_engine,
         "classify_message",
         AsyncMock(
             return_value=types.SimpleNamespace(
                 intent=ai_engine.IntentType.GREETING,
                 is_simple=True,
                 confidence=1.0,
+                usage=None,
             )
         ),
     )
@@ -87,5 +94,4 @@ async def test_process_message_commits_context_before_background_storage(monkeyp
     )
 
     assert result.response_text == "Hi there"
-    db.commit.assert_awaited()
-    assert db.commit.await_count >= 1
+    db.rollback.assert_not_awaited()

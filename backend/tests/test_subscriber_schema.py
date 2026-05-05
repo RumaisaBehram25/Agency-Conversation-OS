@@ -94,9 +94,24 @@ class TestSubscriberListItem:
         item = self._make_item()
         data = item.model_dump(mode="json")
         expected_fields = {
-            "id", "first_name", "last_name", "channel", "buyer_stage",
-            "is_converted", "conversion_value", "total_messages",
-            "first_message_at", "last_message_at", "created_at",
+            "id",
+            "first_name",
+            "last_name",
+            "channel",
+            "buyer_stage",
+            "is_converted",
+            "conversion_value",
+            "total_messages",
+            "first_message_at",
+            "last_message_at",
+            "created_at",
+            "utm_source",
+            "utm_medium",
+            "utm_campaign",
+            "utm_content",
+            "hyros_purchased",
+            "hyros_product",
+            "hyros_synced_at",
         }
         assert set(data.keys()) == expected_fields
 

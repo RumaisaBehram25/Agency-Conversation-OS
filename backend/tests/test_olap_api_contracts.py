@@ -88,6 +88,11 @@ def test_olap_analytics_contracts(client, monkeypatch):
             "ccr": 0.1,
             "avg_response_time_ms": 350,
             "qualification_rate": 0.1,
+            "hyros_confirmed_purchases": 0,
+            "cost_per_purchase": None,
+            "cost_per_conversation": None,
+            "purchases_count": 0,
+            "conversations_count": 0,
             "total_conversations": 100,
             "total_conversions": 10,
             "total_revenue": 500.0,
@@ -98,6 +103,8 @@ def test_olap_analytics_contracts(client, monkeypatch):
             ],
             "cpqc_trend": [{"date": date(2026, 4, 1), "value": 8.5}],
             "ccr_trend": [{"date": date(2026, 4, 1), "value": 0.1}],
+            "purchases_over_time": [],
+            "organic_posts": [],
         }
 
     async def fake_roi(org_id, date_from, date_to):
@@ -156,9 +163,26 @@ def test_olap_analytics_contracts(client, monkeypatch):
     analytics_response = test_client.get("/api/olap/analytics")
     assert analytics_response.status_code == 200
     assert set(analytics_response.json().keys()) == {
-        "date_from", "date_to", "channel", "cpqc", "ccr", "avg_response_time_ms",
-        "qualification_rate", "total_conversations", "total_conversions", "total_revenue",
-        "funnel", "cpqc_trend", "ccr_trend",
+        "date_from",
+        "date_to",
+        "channel",
+        "cpqc",
+        "ccr",
+        "avg_response_time_ms",
+        "qualification_rate",
+        "hyros_confirmed_purchases",
+        "cost_per_purchase",
+        "cost_per_conversation",
+        "purchases_count",
+        "conversations_count",
+        "total_conversations",
+        "total_conversions",
+        "total_revenue",
+        "funnel",
+        "cpqc_trend",
+        "ccr_trend",
+        "purchases_over_time",
+        "organic_posts",
     }
 
     roi_response = test_client.get("/api/olap/analytics/roi")
@@ -192,12 +216,28 @@ def test_olap_analytics_falls_back_to_postgres_when_olap_is_empty(client, monkey
             "total_conversations": 0,
             "total_conversions": 0,
             "total_revenue": 0.0,
+            "hyros_confirmed_purchases": 0,
+            "cost_per_purchase": None,
+            "cost_per_conversation": None,
+            "purchases_count": 0,
+            "conversations_count": 0,
             "funnel": [],
             "cpqc_trend": [],
             "ccr_trend": [],
+            "purchases_over_time": [],
+            "organic_posts": [],
         }
 
-    async def fake_pg_analytics(db, org_id, date_from, date_to, channel):
+    async def fake_pg_analytics(
+        db,
+        org_id,
+        date_from,
+        date_to,
+        channel,
+        campaign_id=None,
+        attora_campaign_id=None,
+        source_type=None,
+    ):
         return {
             "date_from": date_from,
             "date_to": date_to,
@@ -206,12 +246,19 @@ def test_olap_analytics_falls_back_to_postgres_when_olap_is_empty(client, monkey
             "ccr": 0.25,
             "avg_response_time_ms": 280,
             "qualification_rate": 0.25,
+            "hyros_confirmed_purchases": 0,
+            "cost_per_purchase": None,
+            "cost_per_conversation": None,
+            "purchases_count": 0,
+            "conversations_count": 0,
             "total_conversations": 40,
             "total_conversions": 10,
             "total_revenue": 400.0,
             "funnel": [{"name": "conversations", "volume": 40, "drop_off_rate": None}],
             "cpqc_trend": [{"date": date(2026, 4, 1), "value": 7.5}],
             "ccr_trend": [{"date": date(2026, 4, 1), "value": 0.25}],
+            "purchases_over_time": [],
+            "organic_posts": [],
         }
 
     monkeypatch.setattr(olap_api, "get_olap_analytics", fake_olap_analytics)
@@ -237,13 +284,16 @@ def test_olap_campaign_contracts(client, monkeypatch):
         return [{
             "meta_campaign_id": "cmp_1",
             "meta_campaign_name": "Campaign 1",
+            "source_type": "paid",
             "status": "ACTIVE",
+            "daily_budget": None,
             "spend": 100.0,
             "impressions": 1000,
             "clicks": 50,
             "leads": 5,
             "link_clicks": 20,
             "video_views": 200,
+            "post_engagement": 0,
             "cpc": 2.0,
             "cpm": 10.0,
             "ctr": 0.05,

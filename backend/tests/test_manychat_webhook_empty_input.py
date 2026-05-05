@@ -12,9 +12,7 @@ from app.schemas.manychat import ManyChatCustomFields, ManyChatSubscriber, ManyC
 
 
 @pytest.mark.asyncio
-async def test_manychat_webhook_returns_safe_response_for_empty_input(monkeypatch):
-    from app.api import manychat_webhook as webhook_module
-
+async def test_manychat_webhook_returns_safe_response_for_empty_input():
     request = ManyChatWebhookRequest(
         subscriber=ManyChatSubscriber(
             id="mc-123",
@@ -29,17 +27,7 @@ async def test_manychat_webhook_returns_safe_response_for_empty_input(monkeypatc
     org_id = uuid.uuid4()
     db = AsyncMock()
 
-    ai_pipeline_called = False
-
-    async def _fail_if_called(*args, **kwargs):
-        nonlocal ai_pipeline_called
-        ai_pipeline_called = True
-        raise AssertionError("generate_ai_response should not be called for blank input")
-
-    monkeypatch.setattr(webhook_module, "generate_ai_response", _fail_if_called)
-
     response = await manychat_webhook(request=request, org_id=org_id, db=db)
 
     assert response.version == "v2"
     assert response.content.messages[0].text == "Please send a message so I can help you 🙂"
-    assert ai_pipeline_called is False

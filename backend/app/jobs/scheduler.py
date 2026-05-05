@@ -31,6 +31,7 @@ from app.models.analytics import DailyAnalytics
 from app.models.campaign_metrics import CampaignBreakdown, CampaignMetric
 from app.models.conversation import Conversation
 from app.models.message import Message
+from app.jobs.hyros_sync import sync_hyros_purchases
 
 logger = logging.getLogger("attora.jobs.scheduler")
 
@@ -349,6 +350,13 @@ async def _run_archive_messages() -> None:
         logger.info("Scheduled archived_messages export result: %s", result)
 
 
+async def _run_hyros_sync_dispatch() -> None:
+    async with async_session_factory() as session:
+        result = await sync_hyros_purchases(session)
+        await session.commit()
+        logger.info("Scheduled Hyros purchase sync result: %s", result)
+
+
 async def _run_parity() -> None:
     org_ids = [uuid.UUID(value) for value in settings.olap_scheduler_parity_org_ids_list]
     async with async_session_factory() as session:
@@ -368,24 +376,41 @@ async def _run_parity() -> None:
 
 
 def build_scheduler() -> AsyncIOScheduler:
-    """Create the APScheduler instance for self-hosted OLAP jobs."""
+    """Create APScheduler jobs for OLAP maintenance and Hyros purchase sync."""
     scheduler = AsyncIOScheduler(timezone=settings.olap_scheduler_timezone)
-    scheduler.add_job(_run_export_daily_analytics, CronTrigger.from_crontab(settings.olap_scheduler_export_daily_analytics_cron, timezone=settings.olap_scheduler_timezone), id="olap-export-daily-analytics", replace_existing=True, max_instances=1)
-    scheduler.add_job(_run_export_ai_usage, CronTrigger.from_crontab(settings.olap_scheduler_export_ai_usage_cron, timezone=settings.olap_scheduler_timezone), id="olap-export-ai-usage", replace_existing=True, max_instances=1)
-    scheduler.add_job(_run_archive_messages, CronTrigger.from_crontab(settings.olap_scheduler_archive_messages_cron, timezone=settings.olap_scheduler_timezone), id="olap-archive-messages", replace_existing=True, max_instances=1)
-    scheduler.add_job(_run_parity, CronTrigger.from_crontab(settings.olap_scheduler_parity_cron, timezone=settings.olap_scheduler_timezone), id="olap-parity", replace_existing=True, max_instances=1)
+    if settings.olap_scheduler_enabled:
+        scheduler.add_job(_run_export_daily_analytics, CronTrigger.from_crontab(settings.olap_scheduler_export_daily_analytics_cron, timezone=settings.olap_scheduler_timezone), id="olap-export-daily-analytics", replace_existing=True, max_instances=1)
+        scheduler.add_job(_run_export_ai_usage, CronTrigger.from_crontab(settings.olap_scheduler_export_ai_usage_cron, timezone=settings.olap_scheduler_timezone), id="olap-export-ai-usage", replace_existing=True, max_instances=1)
+        scheduler.add_job(_run_archive_messages, CronTrigger.from_crontab(settings.olap_scheduler_archive_messages_cron, timezone=settings.olap_scheduler_timezone), id="olap-archive-messages", replace_existing=True, max_instances=1)
+        scheduler.add_job(_run_parity, CronTrigger.from_crontab(settings.olap_scheduler_parity_cron, timezone=settings.olap_scheduler_timezone), id="olap-parity", replace_existing=True, max_instances=1)
+    if settings.hyros_sync_scheduler_enabled:
+        scheduler.add_job(
+            _run_hyros_sync_dispatch,
+            CronTrigger.from_crontab(settings.hyros_sync_scheduler_cron, timezone=settings.olap_scheduler_timezone),
+            id="hyros-purchase-sync",
+            replace_existing=True,
+            max_instances=1,
+        )
     return scheduler
 
 
 async def main() -> None:
     """Run the scheduler loop until the process is stopped."""
-    if not settings.olap_scheduler_enabled:
-        logger.info("OLAP scheduler is disabled via config; exiting")
+    if not settings.olap_scheduler_enabled and not settings.hyros_sync_scheduler_enabled:
+        logger.info("OLAP and Hyros schedulers are disabled via config; exiting")
         return
 
     scheduler = build_scheduler()
+    if not scheduler.get_jobs():
+        logger.info("Scheduler has no jobs configured; exiting")
+        return
+
     scheduler.start()
-    logger.info("OLAP scheduler started with timezone=%s", settings.olap_scheduler_timezone)
+    logger.info(
+        "Scheduler started timezone=%s jobs=%s",
+        settings.olap_scheduler_timezone,
+        [job.id for job in scheduler.get_jobs()],
+    )
     try:
         await asyncio.Event().wait()
     finally:

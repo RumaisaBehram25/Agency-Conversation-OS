@@ -7,7 +7,7 @@ POST /api/cron/ad-spend-sync        — Sync ad spend and dual-write campaign fa
 POST /api/cron/export-ai-usage      — Export AI usage events to OLAP
 POST /api/cron/archive-messages     — Shadow-archive old messages to OLAP
 POST /api/cron/check-olap-parity    — Compare PostgreSQL facts vs exported Parquet
-POST /api/cron/hyros-sync           — Pull Hyros purchases and match subscribers
+POST /api/cron/hyros-sync           — Sync Hyros purchases onto subscribers (org Hyros keys; scheduler optional every 3h via HYROS_SYNC_SCHEDULER_*)
 
 Protected by CRON_SECRET header — not accessible to regular users.
 """

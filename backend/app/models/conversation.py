@@ -60,6 +60,15 @@ class Conversation(Base, TimestampMixin, OrgScopedMixin):
     last_activity_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
     closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
+    # ── Follow-up Tracking ───────────────────────────────────
+    # How many follow-up touches have been sent in the current silence
+    # cycle. Reset to 0 by context_manager whenever the user replies, so
+    # a returning lead who goes silent again gets the full sequence.
+    follow_up_attempts: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    last_follow_up_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
     # ── Relationships ────────────────────────────────────────
     organization = relationship("Organization", back_populates="conversations")
     subscriber = relationship("Subscriber", back_populates="conversations")

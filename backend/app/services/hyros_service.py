@@ -54,6 +54,8 @@ class HyrosLead:
     origin_lead: HyrosLeadSource | None
     purchases: list[HyrosPurchase]
     raw: dict[str, Any]
+    attora_id: str | None = None
+    attora_sub: str | None = None
 
 
 @dataclass
@@ -76,6 +78,8 @@ class HyrosSale:
     first_source_name: str | None
     first_source_tag: str | None
     raw: dict
+    attora_id: str | None = None
+    attora_sub: str | None = None
 
 
 def _normalize(value: str | None) -> str:
@@ -183,10 +187,73 @@ def _parse_purchase(raw: dict[str, Any]) -> HyrosPurchase:
     )
 
 
+_ATTORA_ID_PREFIXES = ("attora_id:", "attora_id=", "attora-id:", "attora-id=")
+_ATTORA_SUB_PREFIXES = ("attora_sub:", "attora_sub=", "attora-sub:", "attora-sub=")
+
+
+def _extract_attora_identity(
+    raw: dict[str, Any], tags: list[str]
+) -> tuple[str | None, str | None]:
+    """
+    Pull attora_id / attora_sub off a Hyros lead or sale payload.
+
+    Hyros has to be configured (in their dashboard) to map the URL params
+    `attora_id` and `attora_sub` onto the lead. The two common conventions are:
+      1. As a tag string like `attora_id:<uuid>` or `attora_id=<uuid>`.
+      2. As a custom field — either a `customFields` dict (`{attora_id: "..."}`)
+         or a list of `{name, value}` rows.
+
+    We accept both so matching works regardless of how the Hyros side is wired.
+    """
+    attora_id: str | None = None
+    attora_sub: str | None = None
+
+    for tag in tags:
+        if not isinstance(tag, str):
+            continue
+        cleaned = tag.strip()
+        lower = cleaned.lower()
+        if attora_id is None:
+            for prefix in _ATTORA_ID_PREFIXES:
+                if lower.startswith(prefix):
+                    attora_id = cleaned[len(prefix):].strip() or None
+                    break
+        if attora_sub is None:
+            for prefix in _ATTORA_SUB_PREFIXES:
+                if lower.startswith(prefix):
+                    attora_sub = cleaned[len(prefix):].strip() or None
+                    break
+
+    for key in ("customFields", "custom_fields", "customField", "fields"):
+        candidate = raw.get(key)
+        if isinstance(candidate, dict):
+            if attora_id is None:
+                attora_id = _string_from_any(
+                    candidate.get("attora_id") or candidate.get("attoraId")
+                )
+            if attora_sub is None:
+                attora_sub = _string_from_any(
+                    candidate.get("attora_sub") or candidate.get("attoraSub")
+                )
+        elif isinstance(candidate, list):
+            for item in candidate:
+                if not isinstance(item, dict):
+                    continue
+                name = str(item.get("name") or item.get("key") or "").strip().lower()
+                value = _string_from_any(item.get("value"))
+                if name == "attora_id" and attora_id is None:
+                    attora_id = value
+                elif name == "attora_sub" and attora_sub is None:
+                    attora_sub = value
+
+    return attora_id, attora_sub
+
+
 def _parse_lead(raw: dict[str, Any]) -> HyrosLead:
     tags_raw = raw.get("tags")
     tags = [str(tag).strip() for tag in tags_raw if str(tag).strip()] if isinstance(tags_raw, list) else []
     purchases = [_parse_purchase(purchase) for purchase in _extract_rows(raw.get("purchases"))]
+    attora_id, attora_sub = _extract_attora_identity(raw, tags)
     return HyrosLead(
         id=_string_from_any(raw.get("id")),
         email=_string_from_any(raw.get("email")),
@@ -198,6 +265,8 @@ def _parse_lead(raw: dict[str, Any]) -> HyrosLead:
         origin_lead=_extract_source(raw.get("originLead") or raw.get("origin_lead")),
         purchases=purchases,
         raw=raw,
+        attora_id=attora_id,
+        attora_sub=attora_sub,
     )
 
 
@@ -268,17 +337,28 @@ class HyrosService:
             sales = []
             for row in rows:
                 lead_data = row.get("lead") or {}
-                tags = lead_data.get("tags") or []
-                
+                tags_raw = lead_data.get("tags") or []
+                tags = [
+                    str(tag).strip()
+                    for tag in tags_raw
+                    if isinstance(tag, str) and str(tag).strip()
+                ]
+
                 # Extract product: find tag starting with $ and strip it
                 product = None
                 for tag in tags:
-                    if isinstance(tag, str) and tag.startswith("$"):
+                    if tag.startswith("$"):
                         product = tag[1:]
                         break
-                
+
                 first_source = row.get("firstSource") or {}
-                
+
+                # Identity lives on the lead sub-object for sales, with the
+                # row itself as a fallback in case Hyros denormalises it.
+                attora_id, attora_sub = _extract_attora_identity(lead_data, tags)
+                if attora_id is None and attora_sub is None:
+                    attora_id, attora_sub = _extract_attora_identity(row, tags)
+
                 sales.append(
                     HyrosSale(
                         id=_string_from_any(row.get("id")),
@@ -293,6 +373,8 @@ class HyrosService:
                         first_source_name=_string_from_any(first_source.get("name")),
                         first_source_tag=_string_from_any(first_source.get("tag")),
                         raw=row,
+                        attora_id=attora_id,
+                        attora_sub=attora_sub,
                     )
                 )
             return sales
@@ -325,15 +407,34 @@ def match_lead(
     *,
     subscriber_email: str | None,
     subscriber_name: str | None,
+    subscriber_attora_id: str | None = None,
+    subscriber_manychat_id: str | None = None,
 ) -> HyrosLeadMatch | None:
     """
     Match subscriber against Hyros leads using strict priority:
-    1. Email match (most reliable)
-    2. Name fallback (case-insensitive)
-    3. originLead email match
+    0. attora_id match (URL-stamped Attora UUID — most reliable when Hyros is
+       configured to capture the param onto the lead).
+    0.5. attora_sub match (URL-stamped ManyChat subscriber id).
+    1. Email match.
+    2. Name fallback (case-insensitive).
+    3. originLead email match.
     """
+    target_attora_id = _normalize(subscriber_attora_id)
+    target_attora_sub = _normalize(subscriber_manychat_id)
     target_email = _normalize(subscriber_email)
     target_name = _normalize(subscriber_name)
+
+    # Priority 0 — attora_id (Attora's internal subscriber UUID)
+    if target_attora_id:
+        for lead in leads:
+            if _normalize(lead.attora_id) == target_attora_id:
+                return HyrosLeadMatch(lead=lead, matched_by="attora_id")
+
+    # Priority 0.5 — attora_sub (ManyChat subscriber id)
+    if target_attora_sub:
+        for lead in leads:
+            if _normalize(lead.attora_sub) == target_attora_sub:
+                return HyrosLeadMatch(lead=lead, matched_by="attora_sub")
 
     # Priority 1 — Email match
     if target_email:
@@ -429,28 +530,26 @@ async def sync_single_subscriber_hyros_purchase(
         subscriber.hyros_synced_at = now
         return False
 
-    # Email is required for reliable Hyros matching.  Without it we can only
-    # fall back to name matching which is unreliable and frequently wrong.
-    # Log a clear warning so ops can investigate missing email capture.
-    if not subscriber.email:
-        logger.warning(
-            "Hyros sync skipped for subscriber=%s (org=%s): no email on record — "
-            "Hyros cannot match this lead without an email address",
-            subscriber.manychat_subscriber_id,
-            org_id,
-        )
-        subscriber.hyros_synced_at = now
-        await db.commit()
-        return False
-
     leads = await service.fetch_leads(api_key, org=org)
     match = match_lead(
         leads,
         subscriber_email=subscriber.email,
         subscriber_name=_subscriber_full_name(subscriber),
+        subscriber_attora_id=str(subscriber.id),
+        subscriber_manychat_id=subscriber.manychat_subscriber_id,
     )
     subscriber.hyros_synced_at = now
     if match:
         _apply_lead_to_subscriber(subscriber, match.lead, now=now)
         return True
+
+    # No match by any path. If we had nothing but a name to go on, log it so
+    # ops can spot subscribers with no email/identity capture.
+    if not subscriber.email:
+        logger.warning(
+            "Hyros sync found no match for subscriber=%s (org=%s): no email and "
+            "no attora_id/attora_sub captured on the Hyros side",
+            subscriber.manychat_subscriber_id,
+            org_id,
+        )
     return False

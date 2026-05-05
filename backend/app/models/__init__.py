@@ -16,6 +16,7 @@ from app.models.conversion import ConversionEvent
 from app.models.analytics import DailyAnalytics
 from app.models.campaign_metrics import CampaignMetric, CampaignBreakdown
 from app.models.campaign import AdCampaign, CampaignUTM
+from app.models.follow_up import CampaignFollowUp
 from app.models.knowledge_document import KnowledgeDocument
 from app.models.ai_usage_event import AIUsageEvent
 from app.models.manychat_event import ManyChatEvent
@@ -38,6 +39,7 @@ __all__ = [
     "CampaignBreakdown",
     "AdCampaign",
     "CampaignUTM",
+    "CampaignFollowUp",
     "KnowledgeDocument",
     "AIUsageEvent",
     "ManyChatEvent",

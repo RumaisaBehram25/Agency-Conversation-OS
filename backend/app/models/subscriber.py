@@ -100,6 +100,12 @@ class Subscriber(Base, TimestampMixin, OrgScopedMixin):
     # ── Activity Metadata ────────────────────────────────────
     first_message_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     last_message_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Bumped only when the subscriber sends an inbound message. Anchor for
+    # the follow-up dispatcher's silence-timer logic — last_message_at
+    # gets bumped by AI replies too and is therefore unsuitable.
+    last_user_message_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, index=True
+    )
     total_messages: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
 
     # ── Relationships ────────────────────────────────────────

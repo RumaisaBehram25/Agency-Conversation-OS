@@ -119,6 +119,8 @@ async def _sync_hyros_for_org(
     )
 
     subscribers_scanned = 0
+    matched_by_attora_id = 0
+    matched_by_attora_sub = 0
     matched_by_email = 0
     matched_by_name = 0
     matched_by_origin_lead = 0
@@ -134,10 +136,26 @@ async def _sync_hyros_for_org(
 
         # 1. Match against Sales for purchase confirmation
         sale_match = None
+        sub_attora_id = _normalize(str(subscriber.id))
+        sub_attora_sub = _normalize(subscriber.manychat_subscriber_id)
         sub_email = _normalize(subscriber.email)
         sub_full_name = _normalize(_subscriber_full_name(subscriber))
 
-        if sub_email:
+        # Priority 0 — attora_id stamped onto the sale by Hyros
+        if sub_attora_id:
+            sale_match = next(
+                (s for s in sales if _normalize(s.attora_id) == sub_attora_id),
+                None,
+            )
+
+        # Priority 0.5 — attora_sub
+        if not sale_match and sub_attora_sub:
+            sale_match = next(
+                (s for s in sales if _normalize(s.attora_sub) == sub_attora_sub),
+                None,
+            )
+
+        if not sale_match and sub_email:
             sale_match = next(
                 (s for s in sales if _normalize(s.lead_email) == sub_email), None
             )
@@ -179,9 +197,15 @@ async def _sync_hyros_for_org(
                 leads,
                 subscriber_email=subscriber.email,
                 subscriber_name=_subscriber_full_name(subscriber),
+                subscriber_attora_id=str(subscriber.id),
+                subscriber_manychat_id=subscriber.manychat_subscriber_id,
             )
             if match:
-                if match.matched_by == "email":
+                if match.matched_by == "attora_id":
+                    matched_by_attora_id += 1
+                elif match.matched_by == "attora_sub":
+                    matched_by_attora_sub += 1
+                elif match.matched_by == "email":
                     matched_by_email += 1
                 elif match.matched_by == "name":
                     matched_by_name += 1
@@ -201,6 +225,8 @@ async def _sync_hyros_for_org(
     return {
         "subscribers_scanned": subscribers_scanned,
         "sales_scanned": len(sales),
+        "matched_by_attora_id": matched_by_attora_id,
+        "matched_by_attora_sub": matched_by_attora_sub,
         "matched_by_email": matched_by_email,
         "matched_by_name": matched_by_name,
         "matched_by_origin_lead": matched_by_origin_lead,
@@ -224,6 +250,8 @@ async def sync_hyros_purchases(db: AsyncSession) -> dict:
 
     subscribers_scanned = 0
     sales_scanned = 0
+    matched_by_attora_id = 0
+    matched_by_attora_sub = 0
     matched_by_email = 0
     matched_by_name = 0
     matched_by_origin_lead = 0
@@ -244,6 +272,8 @@ async def sync_hyros_purchases(db: AsyncSession) -> dict:
             continue
         subscribers_scanned += org_summary["subscribers_scanned"]
         sales_scanned += org_summary["sales_scanned"]
+        matched_by_attora_id += org_summary.get("matched_by_attora_id", 0)
+        matched_by_attora_sub += org_summary.get("matched_by_attora_sub", 0)
         matched_by_email += org_summary["matched_by_email"]
         matched_by_name += org_summary["matched_by_name"]
         matched_by_origin_lead += org_summary["matched_by_origin_lead"]
@@ -259,6 +289,8 @@ async def sync_hyros_purchases(db: AsyncSession) -> dict:
         "orgs_scanned": len(orgs),
         "subscribers_scanned": subscribers_scanned,
         "sales_scanned": sales_scanned,
+        "matched_by_attora_id": matched_by_attora_id,
+        "matched_by_attora_sub": matched_by_attora_sub,
         "matched_by_email": matched_by_email,
         "matched_by_name": matched_by_name,
         "matched_by_origin_lead": matched_by_origin_lead,

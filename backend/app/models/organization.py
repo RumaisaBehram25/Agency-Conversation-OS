@@ -30,6 +30,10 @@ class Organization(Base, TimestampMixin):
     manychat_api_key: Mapped[str | None] = mapped_column(Text, nullable=True)  # encrypted
     manychat_page_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     manychat_account_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # Namespace of the dumb "send-this-text" outbound flow in this org's
+    # ManyChat. Attora calls trigger_flow with `attora_outbound_message`
+    # set; ManyChat just delivers it. NULL → follow-ups disabled for org.
+    manychat_outbound_flow_ns: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
     # ── Meta Configuration ───────────────────────────────────
     meta_pixel_id: Mapped[str | None] = mapped_column(String(255), nullable=True)

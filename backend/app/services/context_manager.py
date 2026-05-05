@@ -239,6 +239,9 @@ async def store_message_and_update_context(
             )
 
             # ── Update conversation ────────────────────────────
+            # The user just sent us a message → reset follow_up_attempts
+            # so a fresh silence cycle starts. The dispatcher will pick
+            # them up again if they go silent past Touch 1's threshold.
             await session.execute(
                 update(Conversation)
                 .where(Conversation.id == conversation_id)
@@ -246,12 +249,16 @@ async def store_message_and_update_context(
                     message_count=Conversation.message_count + 2,
                     last_activity_at=now,
                     ai_response_time_avg_ms=ai_response.response_time_ms,
+                    follow_up_attempts=0,
                 )
             )
 
             # ── Update subscriber ──────────────────────────────
             sub_updates: dict = {
                 "last_message_at": now,
+                # Anchor for the follow-up dispatcher's silence timer.
+                # Distinct from last_message_at, which AI replies bump too.
+                "last_user_message_at": now,
                 "total_messages": Subscriber.total_messages + 2,
             }
 
@@ -370,43 +377,65 @@ async def _get_or_create_subscriber(
         phone = _clean(custom_fields, "phone")
         if phone:
             subscriber.phone = phone
-        # Update attribution if available
+        # ctwa_clid is the original click-to-WhatsApp click ID — first-touch
+        # only so Meta CAPI can dedupe the original conversion event.
         ctwa_clid = _clean(custom_fields, "ctwa_clid")
         if ctwa_clid and not subscriber.ctwa_clid:
             subscriber.ctwa_clid = ctwa_clid
-        ad_id = _clean(custom_fields, "ad_id")
-        if ad_id and not subscriber.ad_id:
-            subscriber.ad_id = ad_id
-        post_id = _clean(custom_fields, "post_id")
-        if post_id and not subscriber.post_id:
-            subscriber.post_id = post_id
-        ad_set_id = _clean(custom_fields, "ad_set_id")
-        if ad_set_id and not subscriber.ad_set_id:
-            subscriber.ad_set_id = ad_set_id
-        campaign_id = _clean(custom_fields, "campaign_id")
-        if campaign_id and not subscriber.campaign_id:
-            subscriber.campaign_id = campaign_id
+
+        # Re-attribution fields: overwrite on every webhook that carries a
+        # value. A returning subscriber engaging with a NEW ad/post must be
+        # re-attributed so the AI surfaces that campaign's product/links —
+        # not the previous one. (Bug fix: these used to be guarded with
+        # `not subscriber.X`, which froze attribution at first touch.)
+        new_ad_id = _clean(custom_fields, "ad_id")
+        if new_ad_id:
+            subscriber.ad_id = new_ad_id
+        new_post_id = _clean(custom_fields, "post_id")
+        if new_post_id:
+            subscriber.post_id = new_post_id
+        new_ad_set_id = _clean(custom_fields, "ad_set_id")
+        if new_ad_set_id:
+            subscriber.ad_set_id = new_ad_set_id
+
+        # Detect a fresh paid-campaign engagement.
+        new_campaign_id = _clean(custom_fields, "campaign_id")
+        campaign_changed = bool(new_campaign_id) and new_campaign_id != subscriber.campaign_id
+        if new_campaign_id:
+            subscriber.campaign_id = new_campaign_id
+
         # Resolve post_id from cached ad creatives if still missing
         if not subscriber.post_id and subscriber.ad_id:
             cached = await _lookup_post_id_from_ad_id(db, org_id, subscriber.ad_id)
             if cached:
                 subscriber.post_id = cached
-        # Direct attora_campaign_id pass-through (organic campaigns set this
-        # explicitly from ManyChat since they have no Meta ID to look up by).
+
+        # Direct attora_campaign_id pass-through (organic flows can set this
+        # explicitly from ManyChat). Honour a new value even when one was
+        # already set — same re-attribution principle as the paid path.
         direct_attora_id = _clean(custom_fields, "attora_campaign_id")
-        if direct_attora_id and subscriber.attora_campaign_id is None:
+        if direct_attora_id:
             try:
-                subscriber.attora_campaign_id = uuid.UUID(direct_attora_id)
-                logger.info("[CTX] Set subscriber.attora_campaign_id from webhook: %s -> %s", manychat_subscriber_id, subscriber.attora_campaign_id)
+                new_attora_uuid = uuid.UUID(direct_attora_id)
+                if new_attora_uuid != subscriber.attora_campaign_id:
+                    subscriber.attora_campaign_id = new_attora_uuid
+                    logger.info("[CTX] Re-attributed subscriber %s to attora_campaign_id %s (direct)", manychat_subscriber_id, new_attora_uuid)
             except (ValueError, TypeError):
                 logger.warning("[CTX] Invalid attora_campaign_id received from webhook: %s (subscriber=%s)", direct_attora_id, manychat_subscriber_id)
-        # Compliance: link subscriber to registered Attora campaign (or warn)
-        if subscriber.campaign_id and subscriber.attora_campaign_id is None:
+
+        # Compliance: link subscriber to a registered Attora campaign.
+        # Re-resolve when the paid campaign_id changed OR no attribution is
+        # set yet. Only overwrite on a valid resolution so an unregistered
+        # campaign doesn't wipe a good existing attribution.
+        if subscriber.campaign_id and (campaign_changed or subscriber.attora_campaign_id is None):
             resolved = await _resolve_attora_campaign_id(
                 db, org_id, subscriber.campaign_id, manychat_subscriber_id
             )
-            subscriber.attora_campaign_id = resolved
-            logger.info("[CTX] Resolved attora_campaign_id from campaign_id: subscriber=%s campaign_id=%s resolved=%s", manychat_subscriber_id, subscriber.campaign_id, resolved)
+            if resolved is not None:
+                subscriber.attora_campaign_id = resolved
+                logger.info("[CTX] Re-resolved attora_campaign_id from campaign_id: subscriber=%s campaign_id=%s resolved=%s", manychat_subscriber_id, subscriber.campaign_id, resolved)
+            elif subscriber.attora_campaign_id is None:
+                logger.info("[CTX] No registered Attora campaign for campaign_id=%s subscriber=%s", subscriber.campaign_id, manychat_subscriber_id)
         # Organic-post attribution: re-resolve from the ManyChat trigger
         # keyword on EVERY webhook that carries one. ManyChat only sets
         # `keyword` on the comment-trigger webhook (not on follow-up message

@@ -8,6 +8,7 @@ Stores individual messages in conversations, including AI metadata
 import uuid
 
 from sqlalchemy import (
+    Boolean,
     Enum,
     ForeignKey,
     Integer,
@@ -52,6 +53,11 @@ class Message(Base, TimestampMixin):
     ai_response_time_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
     ai_tokens_used: Mapped[int | None] = mapped_column(Integer, nullable=True)
     quick_replies: Mapped[list[str] | None] = mapped_column(ARRAY(Text), nullable=True)
+
+    # True when this message was emitted by the follow-up dispatcher
+    # rather than the inbound webhook AI engine. Used for filtering in
+    # dashboards and exports.
+    is_follow_up: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
     # ── Relationships ────────────────────────────────────────
     conversation = relationship("Conversation", back_populates="messages")

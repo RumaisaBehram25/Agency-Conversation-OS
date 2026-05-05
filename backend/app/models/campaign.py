@@ -64,6 +64,12 @@ class AdCampaign(Base, TimestampMixin, OrgScopedMixin):
         cascade="all, delete-orphan",
     )
     subscribers = relationship("Subscriber", back_populates="attora_campaign")
+    follow_ups = relationship(
+        "CampaignFollowUp",
+        back_populates="campaign",
+        cascade="all, delete-orphan",
+        order_by="CampaignFollowUp.step_order",
+    )
 
     __table_args__ = (
         # Per-org keyword uniqueness — only enforced when keyword is set, so

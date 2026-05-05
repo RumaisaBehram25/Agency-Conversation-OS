@@ -23,6 +23,7 @@ from app.database import get_db
 from app.jobs.ad_spend_sync import sync_ad_spend
 from app.jobs.daily_digest import aggregate_daily_analytics
 from app.jobs.hyros_sync import sync_hyros_purchases
+from app.services.follow_up_engine import dispatch_follow_ups
 from app.jobs.olap_exports import (
     archive_messages_to_olap,
     archive_messages_delta_to_olap,
@@ -192,3 +193,17 @@ async def cron_hyros_sync(
 ) -> dict:
     """Pull Hyros purchases and match against subscriber name + utm_campaign."""
     return await sync_hyros_purchases(db)
+
+
+@router.post("/follow-ups")
+async def cron_follow_ups(
+    _: None = Depends(verify_cron_secret),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """
+    Dispatch due follow-up nudges to silent, unbought subscribers via
+    ManyChat's open outbound flow. Recommended cadence: every 15 minutes.
+    """
+    summary = await dispatch_follow_ups(db)
+    await db.commit()
+    return summary

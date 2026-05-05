@@ -58,10 +58,13 @@ class Settings(BaseSettings):
     # ── Cron Jobs ─────────────────────────────────────────────
     cron_secret: str = "change-me-to-a-random-cron-secret"
 
-    # Follow-up dispatcher: optional in-process cron (alternative: POST /api/cron/follow-ups
-    # from an external scheduler every 15 minutes).
+    # Follow-up dispatcher: optional in-process scheduler (alternative:
+    # POST /api/cron/follow-ups from an external scheduler every ~15 minutes).
     follow_up_scheduler_enabled: bool = False
     follow_up_scheduler_cron: str = "*/15 * * * *"
+    # If >0, runs follow-up job on a fixed interval (seconds) and takes
+    # precedence over follow_up_scheduler_cron. Useful for short test loops.
+    follow_up_scheduler_interval_seconds: int = 0
 
     # ── OLAP / Data Lake ─────────────────────────────────────
     olap_storage_provider: Literal["none", "s3"] = "none"

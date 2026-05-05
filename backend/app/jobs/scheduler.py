@@ -10,6 +10,7 @@ from typing import Literal
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
+from apscheduler.triggers.interval import IntervalTrigger
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -420,16 +421,28 @@ def build_scheduler() -> AsyncIOScheduler:
             max_instances=1,
         )
     if settings.follow_up_scheduler_enabled:
-        scheduler.add_job(
-            _run_follow_ups_dispatch,
-            CronTrigger.from_crontab(
-                settings.follow_up_scheduler_cron,
-                timezone=settings.olap_scheduler_timezone,
-            ),
-            id="follow-ups-dispatch",
-            replace_existing=True,
-            max_instances=1,
-        )
+        if settings.follow_up_scheduler_interval_seconds > 0:
+            scheduler.add_job(
+                _run_follow_ups_dispatch,
+                IntervalTrigger(
+                    seconds=settings.follow_up_scheduler_interval_seconds,
+                    timezone=settings.olap_scheduler_timezone,
+                ),
+                id="follow-ups-dispatch",
+                replace_existing=True,
+                max_instances=1,
+            )
+        else:
+            scheduler.add_job(
+                _run_follow_ups_dispatch,
+                CronTrigger.from_crontab(
+                    settings.follow_up_scheduler_cron,
+                    timezone=settings.olap_scheduler_timezone,
+                ),
+                id="follow-ups-dispatch",
+                replace_existing=True,
+                max_instances=1,
+            )
     return scheduler
 
 

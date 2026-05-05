@@ -1,14 +1,23 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
-import { getAnalytics, getROI, getAIPerformance, getExportUrl, getOrganicKeywordStats } from '../api/analytics';
+import {
+  getAnalytics,
+  getROI,
+  getAIPerformance,
+  getExportUrl,
+  getOrganicKeywordStats,
+  getHyrosSourceBreakdown,
+} from '../api/analytics';
 import { getConversations } from '../api/conversations';
 import { getCampaigns, listAdCampaigns } from '../api/campaigns';
 import { syncMetaNow, getMetaSyncStatus } from '../api/settings';
-import type { AdCampaign, CampaignSourceType, CampaignSummary } from '../types';
+import type { AdCampaign, CampaignSourceType, CampaignSummary, HyrosSourceBreakdownRow } from '../types';
 import AnalyticsMetricCards from '../components/analytics/MetricCards';
 import FunnelChart from '../components/analytics/FunnelChart';
 import TrendChart from '../components/analytics/TrendChart';
+import PurchasesChart from '../components/analytics/PurchasesChart';
+import SourceBreakdownTable from '../components/analytics/SourceBreakdownTable';
 import ROIWaterfall from '../components/analytics/ROIWaterfall';
 import BreakdownCharts from '../components/analytics/BreakdownCharts';
 import CampaignDrillDown from '../components/analytics/CampaignDrillDown';
@@ -117,6 +126,16 @@ export default function AnalyticsPage() {
         ...campaignScope,
       }),
   });
+
+  const hyrosSourceBreakdownQuery = useQuery<HyrosSourceBreakdownRow[]>({
+    queryKey: ['hyros-source-breakdown', dateRange],
+    queryFn: () =>
+      getHyrosSourceBreakdown({
+        date_from: dateFrom,
+        date_to: dateTo,
+      }),
+    enabled: analyticsQuery.isSuccess && !analyticsQuery.isError,
+  });
   const roiQuery = useQuery({
     queryKey: [
       'roi',
@@ -200,6 +219,7 @@ export default function AnalyticsPage() {
       queryClient.invalidateQueries({ queryKey: ['campaigns-for-analytics', campaignQueryParams] }),
       queryClient.invalidateQueries({ queryKey: ['ad-campaigns-organic'] }),
       queryClient.invalidateQueries({ queryKey: ['organic-keyword-stats', dateRange] }),
+      queryClient.invalidateQueries({ queryKey: ['hyros-source-breakdown', dateRange] }),
     ]);
   }, [queryClient, dateRange, selectedCampaign, selectedCampaignSource, sourceFilter]);
 
@@ -553,7 +573,23 @@ export default function AnalyticsPage() {
               avgResponseTimeMs={analytics.avg_response_time_ms}
               qualificationRate={analytics.qualification_rate}
               hyrosConfirmedPurchases={analytics.hyros_confirmed_purchases}
+              costPerPurchase={analytics.cost_per_purchase}
+              costPerConversation={analytics.cost_per_conversation}
+              purchasesSyncedInRange={analytics.purchases_count}
+              distinctSubscribersConversationsStarted={
+                analytics.conversations_count
+              }
             />
+          )}
+
+          {analytics &&
+            analytics.purchases_over_time &&
+            analytics.purchases_over_time.length > 0 && (
+              <PurchasesChart purchasesOverTime={analytics.purchases_over_time} />
+            )}
+
+          {hyrosSourceBreakdownQuery.data && hyrosSourceBreakdownQuery.data.length > 0 && (
+            <SourceBreakdownTable rows={hyrosSourceBreakdownQuery.data} />
           )}
 
           {/* Summary Stats */}

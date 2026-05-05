@@ -101,6 +101,18 @@ export default function LeadProfile({ lead }: LeadProfileProps) {
                 {safeField(lead.phone, "No phone")}
               </dd>
             </div>
+            <div>
+              <dt className="text-xs text-gray-500">attora_sub</dt>
+              <dd className="text-sm font-mono text-gray-700">
+                {lead.manychat_subscriber_id?.trim() ? lead.manychat_subscriber_id : '—'}
+              </dd>
+            </div>
+            <div>
+              <dt className="text-xs text-gray-500">attora_id</dt>
+              <dd className="text-sm font-mono text-gray-700">
+                {lead.id?.trim() ? lead.id : '—'}
+              </dd>
+            </div>
           </dl>
         </div>
 

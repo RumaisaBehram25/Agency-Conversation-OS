@@ -348,6 +348,39 @@ export interface DailyTrend {
   value: number | null;
 }
 
+/** Hyros-synced purchases per calendar day (API `purchases_over_time`). */
+export interface PurchasesDailyPoint {
+  date: string;
+  purchases: number;
+}
+
+export interface HyrosSyncRunSummary {
+  synced_at: string;
+  sales_scanned: number;
+  purchases_matched: number;
+  unmatched_sales: number;
+  matched_by_attora_id: number;
+  matched_by_attora_sub: number;
+  matched_by_email: number;
+  match_rate_pct: number | null;
+  attora_id_signal_pct: number | null;
+}
+
+export interface HyrosSyncHealthResponse {
+  sync_runs: HyrosSyncRunSummary[];
+  avg_match_rate: number | null;
+  last_synced_at: string | null;
+}
+
+export interface HyrosSourceBreakdownRow {
+  traffic_source: string | null;
+  purchases_count: number;
+  conversations_count: number;
+  ad_spend: number | null;
+  cost_per_purchase: number | null;
+  cost_per_conversation: number | null;
+}
+
 export interface FunnelStep {
   name: string;
   volume: number;
@@ -365,11 +398,16 @@ export interface OrganicPostBreakdown {
 }
 
 export interface AnalyticsResponse {
-  cpqc: number;
-  ccr: number;
-  avg_response_time_ms: number;
-  qualification_rate: number;
+  cpqc: number | null;
+  ccr: number | null;
+  avg_response_time_ms: number | null;
+  qualification_rate: number | null;
   hyros_confirmed_purchases: number;
+  cost_per_purchase: number | null;
+  cost_per_conversation: number | null;
+  purchases_count: number;
+  conversations_count: number;
+  purchases_over_time: PurchasesDailyPoint[];
   total_conversations: number;
   total_conversions: number;
   total_revenue: number;

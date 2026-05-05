@@ -1,5 +1,11 @@
 import client from './client';
-import type { AnalyticsResponse, ROIResponse, AIPerformanceResponse } from '../types';
+import type {
+  AnalyticsResponse,
+  ROIResponse,
+  AIPerformanceResponse,
+  HyrosSyncHealthResponse,
+  HyrosSourceBreakdownRow,
+} from '../types';
 
 export interface AnalyticsFilters {
   date_from?: string;
@@ -81,6 +87,29 @@ export async function getOrganicKeywordStats(filters: {
   if (filters.keyword) params.set('keyword', filters.keyword);
   const response = await client.get<OrganicKeywordStats>(
     `/analytics/organic-keyword-stats?${params.toString()}`
+  );
+  return response.data;
+}
+
+export async function getHyrosSourceBreakdown(filters: {
+  date_from: string;
+  date_to: string;
+  channel?: string;
+}): Promise<HyrosSourceBreakdownRow[]> {
+  const params = new URLSearchParams();
+  params.set('dt_from', filters.date_from);
+  params.set('dt_to', filters.date_to);
+  if (filters.channel) params.set('channel', filters.channel);
+  const response = await client.get<HyrosSourceBreakdownRow[]>(
+    `/analytics/hyros-source-breakdown?${params.toString()}`
+  );
+  return response.data;
+}
+
+export async function getHyrosSyncHealth(limit = 10): Promise<HyrosSyncHealthResponse> {
+  const params = new URLSearchParams({ limit: String(limit) });
+  const response = await client.get<HyrosSyncHealthResponse>(
+    `/analytics/hyros-sync-health?${params.toString()}`
   );
   return response.data;
 }

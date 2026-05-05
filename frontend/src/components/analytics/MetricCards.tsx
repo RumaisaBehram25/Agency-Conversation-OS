@@ -6,6 +6,10 @@ interface AnalyticsMetricCardsProps {
   avgResponseTimeMs: number | null;
   qualificationRate: number | null;
   hyrosConfirmedPurchases?: number;
+  costPerPurchase?: number | null;
+  costPerConversation?: number | null;
+  purchasesSyncedInRange?: number;
+  distinctSubscribersConversationsStarted?: number;
 }
 
 interface MetricItem {
@@ -21,6 +25,10 @@ export default function AnalyticsMetricCards({
   avgResponseTimeMs,
   qualificationRate,
   hyrosConfirmedPurchases = 0,
+  costPerPurchase = null,
+  costPerConversation = null,
+  purchasesSyncedInRange = 0,
+  distinctSubscribersConversationsStarted = 0,
 }: AnalyticsMetricCardsProps) {
   const metrics: MetricItem[] = [
     {
@@ -28,6 +36,32 @@ export default function AnalyticsMetricCards({
       value: hyrosConfirmedPurchases.toLocaleString(),
       description: 'Purchases confirmed via Hyros attribution',
       color: 'border-blue-200 bg-blue-50',
+    },
+    {
+      label: 'Cost per Purchase',
+      value: costPerPurchase != null ? formatCurrency(costPerPurchase) : '—',
+      description: `Ad spend ÷ Hyros-synced purchases (${purchasesSyncedInRange} in range); — if no spend or no purchases`,
+      color:
+        costPerPurchase != null
+          ? costPerPurchase <= 50
+            ? 'border-green-200 bg-green-50'
+            : costPerPurchase <= 150
+              ? 'border-yellow-200 bg-yellow-50'
+              : 'border-red-200 bg-red-50'
+          : 'border-gray-200 bg-gray-50',
+    },
+    {
+      label: 'Cost per Conversation',
+      value: costPerConversation != null ? formatCurrency(costPerConversation) : '—',
+      description: `Ad spend ÷ subscribers with a conversation started (${distinctSubscribersConversationsStarted}); — if no spend or none started`,
+      color:
+        costPerConversation != null
+          ? costPerConversation <= 5
+            ? 'border-green-200 bg-green-50'
+            : costPerConversation <= 15
+              ? 'border-yellow-200 bg-yellow-50'
+              : 'border-red-200 bg-red-50'
+          : 'border-gray-200 bg-gray-50',
     },
     {
       label: 'CPQC',
@@ -56,7 +90,7 @@ export default function AnalyticsMetricCards({
   ];
 
   return (
-    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-3">
       {metrics.map((metric) => (
         <div
           key={metric.label}

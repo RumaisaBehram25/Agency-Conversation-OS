@@ -60,8 +60,12 @@ export interface HyrosSyncResult {
   matched_by_email: number;
   matched_by_name: number;
   matched_by_origin_lead: number;
+  matched_by_attora_id?: number;
+  matched_by_attora_sub?: number;
   total_matched: number;
   purchases_found: number;
+  purchases_matched_to_subscribers?: number;
+  unmatched_sales?: number;
   unmatched_hyros_leads: number;
   skipped?: boolean;
   skip_reason?: string;

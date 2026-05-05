@@ -1,14 +1,19 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import Button from '../ui/Button';
 import Input from '../ui/Input';
+import Pagination from '../ui/Pagination';
 import { syncHyrosNow } from '../../api/settings';
 import type { HyrosSyncResult } from '../../api/settings';
-import type { SettingsResponse, SettingsUpdate } from '../../types';
+import type { HyrosSyncHealthResponse, SettingsResponse, SettingsUpdate } from '../../types';
+import { getHyrosSyncHealth } from '../../api/analytics';
 
 interface SettingsFormProps {
   settings: SettingsResponse;
   onSave: (data: SettingsUpdate) => Promise<void>;
 }
+
+/** Rows per page in Hyros sync visibility table */
+const HYROS_SYNC_RUNS_PAGE_SIZE = 3;
 
 function isMasked(value: string | null | undefined): boolean {
   const safeValue = value || '';
@@ -33,6 +38,31 @@ export default function SettingsForm({ settings, onSave }: SettingsFormProps) {
   const [hyrosSyncing, setHyrosSyncing] = useState(false);
   const [hyrosResult, setHyrosResult] = useState<HyrosSyncResult | null>(null);
   const [hyrosError, setHyrosError] = useState('');
+  const [hyrosHealth, setHyrosHealth] = useState<HyrosSyncHealthResponse | null>(null);
+  const [hyrosHealthLoading, setHyrosHealthLoading] = useState(false);
+  const [hyrosSyncRunsPage, setHyrosSyncRunsPage] = useState(1);
+
+  const refreshHyrosHealth = useCallback(async () => {
+    if (!settings.hyros_api_key) return;
+    setHyrosHealthLoading(true);
+    try {
+      const h = await getHyrosSyncHealth(50);
+      setHyrosHealth(h);
+    } catch {
+      setHyrosHealth(null);
+    } finally {
+      setHyrosHealthLoading(false);
+    }
+  }, [settings.hyros_api_key]);
+
+  useEffect(() => {
+    if (!hyrosHealth?.sync_runs.length) return;
+    const totalPages = Math.max(
+      1,
+      Math.ceil(hyrosHealth.sync_runs.length / HYROS_SYNC_RUNS_PAGE_SIZE)
+    );
+    setHyrosSyncRunsPage((p) => Math.min(p, totalPages));
+  }, [hyrosHealth?.sync_runs]);
 
   async function handleHyrosSync() {
     setHyrosSyncing(true);
@@ -41,6 +71,8 @@ export default function SettingsForm({ settings, onSave }: SettingsFormProps) {
     try {
       const result = await syncHyrosNow();
       setHyrosResult(result);
+      setHyrosSyncRunsPage(1);
+      await refreshHyrosHealth();
     } catch (e: unknown) {
       const msg =
         e && typeof e === 'object' && 'response' in e
@@ -52,6 +84,10 @@ export default function SettingsForm({ settings, onSave }: SettingsFormProps) {
       setHyrosSyncing(false);
     }
   }
+
+  useEffect(() => {
+    void refreshHyrosHealth();
+  }, [refreshHyrosHealth]);
 
   useEffect(() => {
     setForm({
@@ -232,30 +268,157 @@ export default function SettingsForm({ settings, onSave }: SettingsFormProps) {
             {hyrosError}
           </div>
         )}
-        {hyrosResult && !hyrosResult.skipped && (
-          <div className="mt-3 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800">
-            <div className="font-medium">Sync complete</div>
-            <div className="mt-1 grid grid-cols-2 gap-x-4 gap-y-0.5 text-xs sm:grid-cols-3">
-              <div>
-                Subscribers scanned: <strong>{hyrosResult.subscribers_scanned}</strong>
-              </div>
-              <div>
-                Sales scanned: <strong>{hyrosResult.sales_scanned}</strong>
-              </div>
-              <div>
-                Purchases matched: <strong>{hyrosResult.purchases_found}</strong>
-              </div>
-              <div>
-                Matched by email: <strong>{hyrosResult.matched_by_email}</strong>
-              </div>
-              <div>
-                Matched by name: <strong>{hyrosResult.matched_by_name}</strong>
-              </div>
-              <div>
-                Unmatched Hyros leads:{' '}
-                <strong>{hyrosResult.unmatched_hyros_leads}</strong>
-              </div>
-            </div>
+        {settings.hyros_api_key && (
+          <div className="mt-3 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-3 text-sm text-emerald-900">
+            <div className="font-medium text-emerald-950">Hyros sync visibility</div>
+            {hyrosHealthLoading ? (
+              <p className="mt-2 text-xs text-emerald-800">Loading recent sync runs…</p>
+            ) : hyrosHealth ? (
+              <>
+                <div className="mt-2 flex flex-wrap gap-x-6 gap-y-1 text-xs text-emerald-800">
+                  <span>
+                    Last logged sync:{' '}
+                    <strong className="text-emerald-950">
+                      {hyrosHealth.last_synced_at
+                        ? new Date(hyrosHealth.last_synced_at).toLocaleString()
+                        : '—'}
+                    </strong>
+                  </span>
+                  <span>
+                    Avg purchase match rate:{' '}
+                    <strong className="text-emerald-950">
+                      {hyrosHealth.avg_match_rate != null
+                        ? `${hyrosHealth.avg_match_rate}%`
+                        : '—'}
+                    </strong>{' '}
+                    <span className="opacity-75">(matched ÷ Hyros sale rows)</span>
+                  </span>
+                </div>
+                {hyrosHealth.sync_runs.length === 0 ? (
+                  <p className="mt-2 text-xs text-emerald-800">
+                    No sync runs logged yet — run Sync now or wait for the scheduled job (after DB
+                    migration).
+                  </p>
+                ) : (
+                  <div className="mt-3 overflow-hidden rounded border border-emerald-100/80 bg-white/60">
+                    <div className="overflow-x-auto">
+                      <table className="min-w-full text-xs">
+                        <thead>
+                          <tr className="border-b border-emerald-100 text-left text-emerald-800">
+                            <th className="px-2 py-1.5 font-medium">Synced at</th>
+                            <th className="px-2 py-1.5 font-medium text-right">Match %</th>
+                            <th className="px-2 py-1.5 font-medium text-right">Unmatched</th>
+                            <th className="px-2 py-1.5 font-medium text-right">Sales</th>
+                            <th className="px-2 py-1.5 font-medium text-right">Matched</th>
+                            <th className="px-2 py-1.5 font-medium text-right">attora_id %</th>
+                            <th className="px-2 py-1.5 font-medium text-right">attora_sub</th>
+                            <th className="px-2 py-1.5 font-medium text-right">email</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {hyrosHealth.sync_runs
+                            .slice(
+                              (hyrosSyncRunsPage - 1) * HYROS_SYNC_RUNS_PAGE_SIZE,
+                              hyrosSyncRunsPage * HYROS_SYNC_RUNS_PAGE_SIZE
+                            )
+                            .map((run, idx) => (
+                              <tr
+                                key={`${run.synced_at}-${(hyrosSyncRunsPage - 1) * HYROS_SYNC_RUNS_PAGE_SIZE + idx}`}
+                                className="border-b border-emerald-50 last:border-0"
+                              >
+                                <td className="px-2 py-1.5 whitespace-nowrap tabular-nums">
+                                  {new Date(run.synced_at).toLocaleString()}
+                                </td>
+                                <td className="px-2 py-1.5 text-right tabular-nums">
+                                  {run.match_rate_pct != null ? `${run.match_rate_pct}%` : '—'}
+                                </td>
+                                <td className="px-2 py-1.5 text-right tabular-nums">
+                                  {run.unmatched_sales}
+                                </td>
+                                <td className="px-2 py-1.5 text-right tabular-nums">
+                                  {run.sales_scanned}
+                                </td>
+                                <td className="px-2 py-1.5 text-right tabular-nums">
+                                  {run.purchases_matched}
+                                </td>
+                                <td className="px-2 py-1.5 text-right tabular-nums">
+                                  {run.attora_id_signal_pct != null
+                                    ? `${run.attora_id_signal_pct}%`
+                                    : '—'}
+                                </td>
+                                <td className="px-2 py-1.5 text-right tabular-nums">
+                                  {run.matched_by_attora_sub}
+                                </td>
+                                <td className="px-2 py-1.5 text-right tabular-nums">
+                                  {run.matched_by_email}
+                                </td>
+                              </tr>
+                            ))}
+                        </tbody>
+                      </table>
+                    </div>
+                    <Pagination
+                      page={hyrosSyncRunsPage}
+                      pageSize={HYROS_SYNC_RUNS_PAGE_SIZE}
+                      total={hyrosHealth.sync_runs.length}
+                      onPageChange={setHyrosSyncRunsPage}
+                    />
+                  </div>
+                )}
+              </>
+            ) : null}
+
+            {hyrosResult && !hyrosResult.skipped && (
+              <>
+                <div className="mt-4 border-t border-emerald-200/90 pt-3 text-emerald-800">
+                  <div className="font-medium text-emerald-950">Latest manual sync</div>
+                  <div className="mt-1 grid grid-cols-2 gap-x-4 gap-y-0.5 text-xs sm:grid-cols-3">
+                    <div>
+                      Subscribers scanned: <strong>{hyrosResult.subscribers_scanned}</strong>
+                    </div>
+                    <div>
+                      Sales scanned: <strong>{hyrosResult.sales_scanned}</strong>
+                    </div>
+                    <div>
+                      Purchases matched: <strong>{hyrosResult.purchases_found}</strong>
+                    </div>
+                    <div>
+                      Purchase match rate:{' '}
+                      <strong>
+                        {hyrosResult.sales_scanned > 0
+                          ? `${((100 * hyrosResult.purchases_found) / hyrosResult.sales_scanned).toFixed(1)}%`
+                          : '—'}
+                      </strong>
+                    </div>
+                    <div>
+                      Total lead matches: <strong>{hyrosResult.total_matched}</strong>
+                    </div>
+                    <div>
+                      Matched by attora_id:{' '}
+                      <strong>{hyrosResult.matched_by_attora_id ?? 0}</strong>
+                    </div>
+                    <div>
+                      Matched by attora_sub:{' '}
+                      <strong>{hyrosResult.matched_by_attora_sub ?? 0}</strong>
+                    </div>
+                    <div>
+                      Matched by email: <strong>{hyrosResult.matched_by_email}</strong>
+                    </div>
+                    <div>
+                      Matched by name: <strong>{hyrosResult.matched_by_name}</strong>
+                    </div>
+                    <div>
+                      Unmatched Hyros purchases (no subscriber):{' '}
+                      <strong>{hyrosResult.unmatched_sales ?? 0}</strong>
+                    </div>
+                    <div>
+                      Unmatched Hyros leads:{' '}
+                      <strong>{hyrosResult.unmatched_hyros_leads}</strong>
+                    </div>
+                  </div>
+                </div>
+              </>
+            )}
           </div>
         )}
       </div>

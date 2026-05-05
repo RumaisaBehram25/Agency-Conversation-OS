@@ -51,6 +51,26 @@ services:
     restart: unless-stopped
     command: python -m app.jobs.scheduler
 
+  # Hyros purchase sync only (no Minio/Trino). Set HYROS_SYNC_SCHEDULER_ENABLED=true
+  # and HYROS_SYNC_SCHEDULER_CRON in .env; OLAP_SCHEDULER_ENABLED can stay false.
+  hyros-scheduler:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    profiles:
+      - hyros-scheduler
+    env_file:
+      - .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - attora-net
+    restart: unless-stopped
+    command: python -m app.jobs.scheduler
+
   # ─── React Frontend (nginx placeholder) ────────────────────
   frontend:
     build:

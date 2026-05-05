@@ -950,7 +950,7 @@ export default function CampaignsPage() {
               </div>
             </div>
 
-            {/* Per-subscriber preview input — stamps attora_sub=<id> on each URL */}
+            {/* Preview uses same stamping as outbound DM — attora_* + utm_medium=dm */}
             <div className="rounded-lg border border-blue-100 bg-blue-50 p-3">
               <div className="mb-2 flex items-center justify-between gap-2">
                 <div>
@@ -958,8 +958,10 @@ export default function CampaignsPage() {
                     Preview as subscriber
                   </div>
                   <p className="mt-0.5 text-[11px] text-blue-700">
-                    Appends <span className="font-mono">attora_sub=&lt;id&gt;</span> to each URL
-                    — same stamping the AI does at reply time.
+                    Appends <span className="font-mono">attora_sub</span>,{' '}
+                    <span className="font-mono">attora_id</span> when known,{' '}
+                    and <span className="font-mono">utm_medium=dm</span> plus campaign UTMs —
+                    same as AI / ManyChat outbound links.
                   </p>
                 </div>
                 {previewUtm && (

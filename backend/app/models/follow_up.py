@@ -1,12 +1,12 @@
 """
 Attora — Follow-up Rule Model
 
-One row per nudge in a campaign's sequence. Example for the MUSCLE
-campaign: three rows at step_order 1/2/3 with after_minutes 60/180/720.
+One row per nudge in a campaign's sequence (e.g. four touches at
+step_order 1–4).
 
-The dispatcher (`services/follow_up_engine.py`) reads these rules every
-~15 min and sends `messages[step_order]` via ManyChat when the subscriber
-has been silent past the configured threshold and hasn't bought yet.
+The dispatcher (`services/follow_up_engine.py`) runs on a cron (often every
+15 minutes) and sends the next eligible touch via ManyChat when timing and
+silence checks pass.
 """
 
 import uuid
@@ -31,9 +31,8 @@ class CampaignFollowUp(Base, TimestampMixin, OrgScopedMixin):
     # the engine can fetch in order and address them by position.
     step_order: Mapped[int] = mapped_column(Integer, nullable=False)
 
-    # Minutes of subscriber silence before this touch fires. Measured from
-    # `subscribers.last_user_message_at` (or, when the user has never
-    # replied, from `conversation.started_at`).
+    # Touch 1: minutes since last user message (or conversation start).
+    # Touch 2+: minutes since the previous follow-up (`last_follow_up_at`).
     after_minutes: Mapped[int] = mapped_column(Integer, nullable=False)
 
     # The message body. May contain `[LINK]` which the engine replaces with

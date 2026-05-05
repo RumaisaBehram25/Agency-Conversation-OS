@@ -5,8 +5,11 @@ Picks subscribers who have gone silent past a campaign's configured
 threshold and pushes the next-due nudge through ManyChat.
 
 Decision flow per subscriber (all must be true):
-  1. Silent — `now() - silence_anchor >= rule.after_minutes`,
-     where `silence_anchor = COALESCE(last_user_message_at, conv.started_at)`.
+  1. Due — **Touch 1** (`follow_up_attempts == 0`): minutes since
+     `COALESCE(last_user_message_at, conv.started_at)` must be >=
+     `rule.after_minutes`.
+     **Touch 2+**: minutes since **the previous follow-up** (`conv.last_follow_up_at`)
+     must be >= `rule.after_minutes` (independent waits after each touch).
   2. Last message was outbound (we don't nudge an actively-engaged thread).
   3. Hasn't bought — `hyros_purchased = false` AND
      `buyer_stage NOT IN (purchase, post_purchase)` AND no recorded
@@ -187,16 +190,29 @@ async def _process_subscriber(
 
     next_rule = rules[conv.follow_up_attempts]
 
-    # Anchor the silence timer.
-    silence_anchor = subscriber.last_user_message_at or conv.started_at or conv.created_at
-    if silence_anchor is None:
-        result.skipped_threshold_not_met += 1
-        return
+    # ── Timing: Touch 1 = silence since last *user* message (or conv start).
+    #    Touch 2+ = elapsed since we sent the *previous* follow-up (per-touch gaps).
+    if conv.follow_up_attempts == 0:
+        silence_anchor = (
+            subscriber.last_user_message_at or conv.started_at or conv.created_at
+        )
+        if silence_anchor is None:
+            result.skipped_threshold_not_met += 1
+            return
 
-    if silence_anchor.tzinfo is None:
-        silence_anchor = silence_anchor.replace(tzinfo=timezone.utc)
+        if silence_anchor.tzinfo is None:
+            silence_anchor = silence_anchor.replace(tzinfo=timezone.utc)
 
-    elapsed_minutes = (now - silence_anchor).total_seconds() / 60.0
+        elapsed_minutes = (now - silence_anchor).total_seconds() / 60.0
+    else:
+        anchor = conv.last_follow_up_at
+        if anchor is None:
+            result.skipped_threshold_not_met += 1
+            return
+        if anchor.tzinfo is None:
+            anchor = anchor.replace(tzinfo=timezone.utc)
+        elapsed_minutes = (now - anchor).total_seconds() / 60.0
+
     if elapsed_minutes < next_rule.after_minutes:
         result.skipped_threshold_not_met += 1
         return

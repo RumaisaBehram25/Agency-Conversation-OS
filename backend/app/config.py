@@ -58,6 +58,11 @@ class Settings(BaseSettings):
     # ── Cron Jobs ─────────────────────────────────────────────
     cron_secret: str = "change-me-to-a-random-cron-secret"
 
+    # Follow-up dispatcher: optional in-process cron (alternative: POST /api/cron/follow-ups
+    # from an external scheduler every 15 minutes).
+    follow_up_scheduler_enabled: bool = False
+    follow_up_scheduler_cron: str = "*/15 * * * *"
+
     # ── OLAP / Data Lake ─────────────────────────────────────
     olap_storage_provider: Literal["none", "s3"] = "none"
     olap_query_provider: Literal["none", "trino", "athena"] = "none"

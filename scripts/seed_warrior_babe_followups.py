@@ -1,24 +1,26 @@
 """
 Attora — Warrior Babe Follow-up Sequences
 
-Idempotent seed for the two organic-comment campaigns from the brief:
+Idempotent seed for the organic-comment campaigns **MUSCLE** and **MACROS**:
+same four-touch copy and the same per-touch delays for both.
 
-  1. MUSCLE  → 7-Day Metabolism Reset ($7)     — 3 touches: 60min, 3hr, 12hr
-  2. MACROS  → Macro Method ($27)              — 4 touches: 60min, 3hr, 12hr, 24hr (final)
+Timing (see `follow_up_engine.py`):
+  - Touch 1: `after_minutes` since the lead's last inbound message (or conversation
+    start if they never replied).
+  - Touches 2–4: each `after_minutes` is counted from when the *previous* follow-up
+    was sent — so 180 min means "no reply for 180 minutes after Touch 1", etc.
 
-Touch text contains a literal `[LINK]` token that the follow-up engine
-substitutes per-subscriber at send time with the campaign's stamped
-checkout URL (carrying utm_*, attora_sub, attora_id).
+Touch 4 uses `[LINK]` so the engine substitutes the correct UTM + attora_sub /
+attora_id URL for that subscriber and campaign (never hard-code example links).
 
-Re-running this script is safe — it upserts on (campaign_id, step_order).
+Re-running is safe — upserts on (campaign_id, step_order).
 
 Usage:
     python scripts/seed_warrior_babe_followups.py
 
 Requires:
-    - DATABASE_URL_SYNC env var (or .env file in backend/)
-    - The 'warrior-babe' org and its MUSCLE / MACROS campaigns must
-      already exist (created via the dashboard's Campaigns page).
+    - DATABASE_URL_SYNC or DATABASE_URL in project-root `.env` and/or `backend/.env`
+    - Org `warrior-babe` and organic campaigns with keywords MUSCLE and MACROS
 """
 
 from __future__ import annotations
@@ -33,75 +35,78 @@ from sqlalchemy import create_engine, text
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = SCRIPT_DIR.parent
-load_dotenv(PROJECT_ROOT / "backend" / ".env")
+# Root `.env` (from .env.example) and optional `backend/.env` — backend wins if both set keys.
+load_dotenv(PROJECT_ROOT / ".env")
+load_dotenv(PROJECT_ROOT / "backend" / ".env", override=True)
 
 
 def _db_url() -> str:
     url = os.getenv("DATABASE_URL_SYNC") or os.getenv("DATABASE_URL")
     if not url:
-        print("ERROR: DATABASE_URL_SYNC (or DATABASE_URL) not set.", file=sys.stderr)
+        root_env = PROJECT_ROOT / ".env"
+        back_env = PROJECT_ROOT / "backend" / ".env"
+        print(
+            "ERROR: DATABASE_URL_SYNC or DATABASE_URL is not set.",
+            file=sys.stderr,
+        )
+        print(
+            f"  Add it to {root_env} and/or {back_env} (copy from .env.example).",
+            file=sys.stderr,
+        )
+        print(
+            "  Seed needs a sync driver URL, e.g. postgresql://user:pass@host:5432/dbname "
+            "(use DATABASE_URL_SYNC, or DATABASE_URL without +asyncpg).",
+            file=sys.stderr,
+        )
         sys.exit(1)
-    # Alembic / sync engine wants psycopg2 driver, not asyncpg.
     return url.replace("+asyncpg", "")
 
 
 ORG_SLUG = "warrior-babe"
 
-MUSCLE_TOUCHES = [
+# Shared sequence for both MUSCLE and MACROS — (step_order, after_minutes, message, is_final)
+WARRIOR_BABE_TOUCHES = [
     (
         1,
-        60,
-        "Hey! Any questions about the Reset? Honestly don't overthink it...way "
-        "simpler than it sounds ",
+        1,
+        (
+            "Hey! Any questions about this?\n\n"
+            "Honestly don't overthink it. it's way simpler than it sounds 😊"
+        ),
         False,
     ),
     (
         2,
-        180,
-        "One thing about the Reset...it's built for women on GLP-1 who want to "
-        "drop the weight without dropping their muscle with it. Helps to avoid "
-        "the 'skinny fat' look.\n\nSo important, and most plans miss it.",
-        False,
-    ),
-    (
-        3,
-        720,
-        "Hey…checking back in. If you're on the fence, know that this is 100% "
-        "made for busy women who've tried it all. It's so easy and simple to "
-        "follow. And no dieting required. What do you think?",
-        True,
-    ),
-]
-
-MACROS_TOUCHES = [
-    (
         1,
-        60,
-        "Hey! Any questions about the Method so far? Honestly don't let the "
-        "word \"macros\" intimidate you…it's way simpler than it sounds ",
-        False,
-    ),
-    (
-        2,
-        180,
-        "One thing that helps...the Method isn't a diet. It's how to eat with "
-        "your body after 40 instead of against it. Most women I talk to are "
-        "eating way less…and it stops all their fat loss.",
+        (
+            "One thing that really matters… this isn't a diet.\n\n"
+            "The Method is about learning how to eat with your body after 40 — "
+            "not against it.\n\n"
+            "Most women I talk to are actually eating too little… and it's what's "
+            "holding their fat loss back."
+        ),
         False,
     ),
     (
         3,
-        720,
-        "Still thinking about it? Totally get it. Just know 21,000+ women over "
-        "35 have already used this exact method to look and feel better than "
-        "they have in years. It's also 80% off. Questions?",
+        1,
+        (
+            "Still thinking it over? Totally fair.\n\n"
+            "Just know that 21,000+ women over 35 have already used this exact "
+            "method to feel better, look better, and get results that actually "
+            "last.\n\n"
+            "And right now, it's still 80% off.\n"
+            "If you've got questions, just ask — I'm here."
+        ),
         False,
     ),
     (
         4,
-        1440,
-        "Last note from me babe The Method is yours for 80% off today. If "
-        "you've been on the fence, here's your link: [LINK]",
+        1,
+        (
+            "Last note from me babe 🫶 The Method is yours for 80% off today. "
+            "If you've been on the fence, here's your link: [LINK]"
+        ),
         True,
     ),
 ]
@@ -202,13 +207,18 @@ def main() -> None:
         muscle_id = _resolve_campaign_id(conn, org_id, "MUSCLE")
         macros_id = _resolve_campaign_id(conn, org_id, "MACROS")
 
-        muscle_n = _upsert_touches(conn, org_id, muscle_id, MUSCLE_TOUCHES)
-        macros_n = _upsert_touches(conn, org_id, macros_id, MACROS_TOUCHES)
+        muscle_n = _upsert_touches(conn, org_id, muscle_id, WARRIOR_BABE_TOUCHES)
+        macros_n = _upsert_touches(conn, org_id, macros_id, WARRIOR_BABE_TOUCHES)
 
-    print(f"Seeded {muscle_n} MUSCLE touches and {macros_n} MACROS touches "
-          f"for org {ORG_SLUG}.")
-    print("Reminder: Organization.manychat_outbound_flow_ns must also be "
-          "set on the warrior-babe org for the dispatcher to send anything.")
+    print(
+        f"Seeded {muscle_n} MUSCLE touches and {macros_n} MACROS touches "
+        f"for org {ORG_SLUG}."
+    )
+    print(
+        "Reminder: set Organization.manychat_outbound_flow_ns for dispatch, and "
+        "run follow-ups every 15 min via POST /api/cron/follow-ups or enable "
+        "FOLLOW_UP_SCHEDULER_ENABLED=true (see scheduler / config)."
+    )
 
 
 if __name__ == "__main__":

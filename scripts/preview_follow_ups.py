@@ -1,9 +1,9 @@
 """
 Dry-run preview of the follow-up dispatcher.
 
-Walks the same decision tree as services/follow_up_engine.py but only
-READS — it never calls ManyChat and never writes to the DB. Use it to
-sanity-check who would get nudged before scheduling the cron.
+Mirrors timing and silence logic from ``services.follow_up_engine`` (Touch 1 =
+minutes since user / conv start; Touches 2+ = minutes since ``last_follow_up_at``)
+but only reads the DB — no ManyChat calls and no writes.
 
 Usage:
     python scripts/preview_follow_ups.py [--org-slug warrior-babe]
@@ -24,13 +24,23 @@ from dotenv import load_dotenv
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = SCRIPT_DIR.parent
-load_dotenv(PROJECT_ROOT / "backend" / ".env")
+load_dotenv(PROJECT_ROOT / ".env")
+load_dotenv(PROJECT_ROOT / "backend" / ".env", override=True)
 
 
 def _asyncpg_url() -> str:
     raw = os.getenv("DATABASE_URL") or os.getenv("DATABASE_URL_SYNC") or ""
     if not raw:
-        print("ERROR: DATABASE_URL not set.", file=sys.stderr)
+        root_env = PROJECT_ROOT / ".env"
+        back_env = PROJECT_ROOT / "backend" / ".env"
+        print(
+            "ERROR: DATABASE_URL or DATABASE_URL_SYNC is not set.",
+            file=sys.stderr,
+        )
+        print(
+            f"  Add it to {root_env} and/or {back_env} (see .env.example at repo root).",
+            file=sys.stderr,
+        )
         sys.exit(1)
     return raw.replace("postgresql+asyncpg://", "postgresql://").replace(
         "postgres+asyncpg://", "postgres://"
@@ -131,7 +141,8 @@ async def _preview(org_slug: str | None) -> None:
 
                     conv = await conn.fetchrow(
                         """
-                        SELECT id, started_at, created_at, follow_up_attempts
+                        SELECT id, started_at, created_at, follow_up_attempts,
+                               last_follow_up_at
                         FROM conversations
                         WHERE subscriber_id = $1 AND status = 'active'
                         ORDER BY last_activity_at DESC NULLS LAST
@@ -150,18 +161,33 @@ async def _preview(org_slug: str | None) -> None:
 
                     next_rule = rule_list[attempts]
 
-                    silence_anchor = (
-                        sub["last_user_message_at"]
-                        or conv["started_at"]
-                        or conv["created_at"]
-                    )
-                    if silence_anchor is None:
-                        skip_threshold += 1
-                        continue
-                    if silence_anchor.tzinfo is None:
-                        silence_anchor = silence_anchor.replace(tzinfo=timezone.utc)
+                    if attempts == 0:
+                        silence_anchor = (
+                            sub["last_user_message_at"]
+                            or conv["started_at"]
+                            or conv["created_at"]
+                        )
+                        if silence_anchor is None:
+                            skip_threshold += 1
+                            continue
+                        if silence_anchor.tzinfo is None:
+                            silence_anchor = silence_anchor.replace(
+                                tzinfo=timezone.utc
+                            )
+                        elapsed_min = (
+                            now - silence_anchor
+                        ).total_seconds() / 60.0
+                        timing_note = "since last user msg / conv start"
+                    else:
+                        anchor = conv["last_follow_up_at"]
+                        if anchor is None:
+                            skip_threshold += 1
+                            continue
+                        if anchor.tzinfo is None:
+                            anchor = anchor.replace(tzinfo=timezone.utc)
+                        elapsed_min = (now - anchor).total_seconds() / 60.0
+                        timing_note = "since prev follow-up"
 
-                    elapsed_min = (now - silence_anchor).total_seconds() / 60.0
                     if elapsed_min < next_rule["after_minutes"]:
                         skip_threshold += 1
                         continue
@@ -186,8 +212,8 @@ async def _preview(org_slug: str | None) -> None:
                     ) or "(no name)"
                     print(
                         f"    → {sub['manychat_subscriber_id']:>20}  {name:<25}  "
-                        f"silent {elapsed_min:7.1f} min  "
-                        f"→ would send Touch {next_rule['step_order']}"
+                        f"{elapsed_min:7.1f} min ({timing_note})  "
+                        f"→ Touch {next_rule['step_order']}"
                         f"{' [FINAL]' if next_rule['is_final'] else ''}"
                     )
 

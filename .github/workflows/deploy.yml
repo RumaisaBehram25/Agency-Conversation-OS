@@ -63,6 +63,6 @@ jobs:
             echo ">>> Restarting Docker..."
             docker-compose down --remove-orphans
             docker-compose up -d --build
-            docker compose --profile hyros-scheduler up -d hyros-scheduler
+            docker-compose --profile hyros-scheduler up -d hyros-scheduler
             echo ">>> Deploy complete!"
             docker-compose ps

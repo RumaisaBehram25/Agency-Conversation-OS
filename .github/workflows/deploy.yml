@@ -57,6 +57,8 @@ jobs:
             echo "CRON_SECRET=${{ secrets.CRON_SECRET }}" >> .env
             echo "X-Attora-Key=${{ secrets.X_ATTORA_KEY }}" >> .env
             echo "Request_URL=${{ secrets.REQUEST_URL }}" >> .env
+            echo "HYROS_SYNC_SCHEDULER_ENABLED=${{ secrets.HYROS_SYNC_SCHEDULER_ENABLED }}" >> .env
+            echo "HYROS_SYNC_SCHEDULER_CRON=${{ secrets.HYROS_SYNC_SCHEDULER_CRON }}" >> .env
 
             echo ">>> Restarting Docker..."
             docker-compose down --remove-orphans

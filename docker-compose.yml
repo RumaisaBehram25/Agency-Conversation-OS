@@ -51,8 +51,11 @@ services:
     restart: unless-stopped
     command: python -m app.jobs.scheduler
 
-  # Hyros purchase sync only (no Minio/Trino). Set HYROS_SYNC_SCHEDULER_ENABLED=true
-  # and HYROS_SYNC_SCHEDULER_CRON in .env; OLAP_SCHEDULER_ENABLED can stay false.
+  # Lightweight scheduler for Hyros purchase sync + follow-up dispatch
+  # (no Minio/Trino). Toggle each via:
+  #   HYROS_SYNC_SCHEDULER_ENABLED / HYROS_SYNC_SCHEDULER_CRON
+  #   FOLLOW_UP_SCHEDULER_ENABLED  / FOLLOW_UP_SCHEDULER_CRON
+  # OLAP_SCHEDULER_ENABLED can stay false. Both jobs share the same process.
   hyros-scheduler:
     build:
       context: ./backend

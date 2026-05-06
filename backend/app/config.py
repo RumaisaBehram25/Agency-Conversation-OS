@@ -102,6 +102,10 @@ class Settings(BaseSettings):
     hyros_sync_scheduler_enabled: bool = False
     hyros_sync_scheduler_cron: str = "0 */3 * * *"
 
+    # ── Follow-up dispatcher (per-org; needs manychat_outbound_flow_ns set) ──
+    follow_up_scheduler_enabled: bool = False
+    follow_up_scheduler_cron: str = "*/15 * * * *"
+
     @property
     def cors_origins_list(self) -> list[str]:
         """Parse CORS origins from comma-separated string."""

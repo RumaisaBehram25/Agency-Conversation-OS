@@ -1,6 +1,6 @@
 /**
  * Relative display for last-activity timestamps (Leads & Conversations tables).
- * Today → "Today, {time}"; yesterday → "Yesterday, {time}"; older → date + time.
+ * Today / Yesterday / older dates — no commas (avoids cluttered UI).
  */
 export function formatTime(timestamp: string | number | Date | null | undefined): string {
   if (timestamp == null || timestamp === '') return '—';
@@ -20,18 +20,15 @@ export function formatTime(timestamp: string | number | Date | null | undefined)
   });
 
   if (dayDiff === 0) {
-    return `Today, ${timeStr}`;
+    return `Today ${timeStr}`;
   }
   if (dayDiff === 1) {
-    return `Yesterday, ${timeStr}`;
+    return `Yesterday ${timeStr}`;
   }
 
   const sameYear = date.getFullYear() === now.getFullYear();
-  return date.toLocaleString('en-US', {
-    month: 'short',
-    day: 'numeric',
-    ...(sameYear ? {} : { year: 'numeric' as const }),
-    hour: 'numeric',
-    minute: '2-digit',
-  });
+  const month = date.toLocaleString('en-US', { month: 'short' });
+  const day = date.getDate();
+  const datePart = sameYear ? `${month} ${day}` : `${month} ${day} ${date.getFullYear()}`;
+  return `${datePart} ${timeStr}`;
 }

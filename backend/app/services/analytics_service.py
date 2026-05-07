@@ -1468,6 +1468,12 @@ async def get_analytics_export_data(
     return export_data
 
 
+def _subscriber_hyros_traffic_source_nonempty_clause():
+    """Non-null non-blank ``hyros_traffic_source`` (values populated by Hyros sync only)."""
+    clean = func.nullif(func.trim(Subscriber.hyros_traffic_source), "")
+    return clean.isnot(None)
+
+
 async def get_hyros_source_breakdown(
     db: AsyncSession,
     org_id: uuid.UUID,
@@ -1476,8 +1482,10 @@ async def get_hyros_source_breakdown(
     channel: str | None = None,
 ) -> list[HyrosSourceBreakdownRow]:
     """
-    Per Hyros traffic-source bucket (NULL/blank → organic): purchases,
-    conversations, and campaign spend allocated from Meta facts via purchaser×campaign shares.
+    Per Hyros traffic-source string (subscribers with non-empty ``hyros_traffic_source`` only).
+
+    Rows without Hyros attribution (NULL/blank traffic source) are excluded — no synthetic
+    \"organic\" bucket. Spend is Meta ``campaign_metrics`` in-range, split by purchaser×campaign.
     """
     dt_from = datetime(date_from.year, date_from.month, date_from.day, tzinfo=timezone.utc)
     dt_to = datetime(date_to.year, date_to.month, date_to.day, 23, 59, 59, tzinfo=timezone.utc)
@@ -1491,6 +1499,7 @@ async def get_hyros_source_breakdown(
         attora_campaign_id=None,
         source_type=None,
     )
+    purchase_filters.append(_subscriber_hyros_traffic_source_nonempty_clause())
     bucket_sql = _hyros_subscriber_traffic_bucket_sql()
 
     purch_stmt = (
@@ -1526,6 +1535,8 @@ async def get_hyros_source_breakdown(
             conv_where.append(Conversation.channel == ChannelType(channel))
         except ValueError:
             pass
+
+    conv_where.append(_subscriber_hyros_traffic_source_nonempty_clause())
 
     conv_stmt = (
         select(

@@ -88,8 +88,9 @@ export default function SourceBreakdownTable({ rows }: SourceBreakdownTableProps
     <div className="card">
       <h3 className="text-sm font-semibold text-gray-900 mb-1">Hyros traffic source breakdown</h3>
       <p className="text-xs text-gray-500 mb-4">
-        Purchases use Hyros sync window; spend is Meta campaign spend in the same dates, split by
-        purchaser mix per campaign. Blank Hyros source is <strong>organic</strong>.
+        Sources are Hyros traffic source strings only — leads without Hyros attribution are omitted.
+        Purchases use Hyros sync dates; spend is Meta campaign spend in the same range, split by
+        purchaser mix per campaign.
       </p>
       <div className="overflow-x-auto">
         <table className="min-w-full text-sm">

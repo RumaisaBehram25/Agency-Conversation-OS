@@ -197,9 +197,10 @@ async def analytics_hyros_source_breakdown(
     ),
 ) -> list[HyrosSourceBreakdownRow]:
     """
-    Cost and volume by `subscribers.hyros_traffic_source` (blank → organic).
+    Cost and volume only for subscribers with a non-empty ``hyros_traffic_source``
+    (Hyros-provided strings). Blank/unset sources are omitted.
 
-    Spend is taken from `campaign_metrics` (campaign level) in the same date
+    Spend is taken from ``campaign_metrics`` (campaign level) in the same date
     window, split across buckets by each Meta campaign's Hyros-synced purchaser mix.
     """
     if dt_from > dt_to:

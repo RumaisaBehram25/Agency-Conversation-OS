@@ -1,9 +1,8 @@
-import { formatCurrency, formatPercent, formatDuration } from '../../utils/formatters';
+import { formatCurrency, formatPercent } from '../../utils/formatters';
 
 interface AnalyticsMetricCardsProps {
   cpqc: number | null;
   ccr: number | null;
-  avgResponseTimeMs: number | null;
   qualificationRate: number | null;
   hyrosConfirmedPurchases?: number;
   costPerPurchase?: number | null;
@@ -22,7 +21,6 @@ interface MetricItem {
 export default function AnalyticsMetricCards({
   cpqc,
   ccr,
-  avgResponseTimeMs,
   qualificationRate,
   hyrosConfirmedPurchases = 0,
   costPerPurchase = null,
@@ -74,12 +72,6 @@ export default function AnalyticsMetricCards({
       value: ccr != null ? formatPercent(ccr) : '—',
       description: 'Conversation Conversion Rate',
       color: ccr != null ? (ccr >= 0.1 ? 'border-green-200 bg-green-50' : ccr >= 0.05 ? 'border-yellow-200 bg-yellow-50' : 'border-red-200 bg-red-50') : 'border-gray-200 bg-gray-50',
-    },
-    {
-      label: 'Avg Response Time',
-      value: avgResponseTimeMs != null ? formatDuration(avgResponseTimeMs) : '—',
-      description: 'Average AI response latency',
-      color: avgResponseTimeMs != null ? (avgResponseTimeMs <= 5000 ? 'border-green-200 bg-green-50' : avgResponseTimeMs <= 8000 ? 'border-yellow-200 bg-yellow-50' : 'border-red-200 bg-red-50') : 'border-gray-200 bg-gray-50',
     },
     {
       label: 'Qualification Rate',

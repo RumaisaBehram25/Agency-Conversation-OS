@@ -159,6 +159,7 @@ def test_analytics_contracts(client, monkeypatch):
         campaign_id=None,
         attora_campaign_id=None,
         source_type=None,
+        is_test=None,
     ):
         return {
             "date_from": date_from,
@@ -384,6 +385,7 @@ def test_root_reporting_endpoints_ignore_olap_flag(client, monkeypatch):
         campaign_id=None,
         attora_campaign_id=None,
         source_type=None,
+        is_test=None,
     ):
         return {
             "date_from": date_from,

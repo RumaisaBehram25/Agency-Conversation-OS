@@ -72,9 +72,17 @@ def _apply_conversation_filters(
     is_test: bool | None,
     source_type: str | None,
     keywords: list[str],
+    campaign_id: str | None,
+    attora_campaign_id: uuid.UUID | None,
 ):
     activity_ts = func.coalesce(Conversation.last_activity_at, Conversation.created_at)
-    needs_subscriber_join = is_test is not None or (keywords and source_type == "organic")
+    needs_subscriber_join = (
+        is_test is not None
+        or source_type is not None
+        or bool(keywords)
+        or campaign_id is not None
+        or attora_campaign_id is not None
+    )
 
     query = query.where(Conversation.org_id == org_id)
 
@@ -117,9 +125,22 @@ def _apply_conversation_filters(
         else:
             query = query.where(~Subscriber.manychat_subscriber_id.like("attora_test%"))
 
-    if keywords and source_type == "organic":
-        query = query.join(AdCampaign, Subscriber.attora_campaign_id == AdCampaign.id)
-        query = query.where(AdCampaign.source_type == "organic", AdCampaign.keyword.in_(keywords))
+    if campaign_id:
+        query = query.where(Subscriber.campaign_id == campaign_id)
+
+    if attora_campaign_id is not None:
+        query = query.where(Subscriber.attora_campaign_id == attora_campaign_id)
+    elif source_type == "paid":
+        # Paid conversations are tied to subscribers stamped with a paid campaign_id.
+        query = query.where(Subscriber.campaign_id.is_not(None))
+    elif source_type == "organic":
+        organic_campaigns = select(AdCampaign.id).where(
+            AdCampaign.org_id == org_id,
+            AdCampaign.source_type == "organic",
+        )
+        if keywords:
+            organic_campaigns = organic_campaigns.where(AdCampaign.keyword.in_(keywords))
+        query = query.where(Subscriber.attora_campaign_id.in_(organic_campaigns))
 
     return query
 
@@ -144,6 +165,8 @@ async def list_conversations(
     is_test: bool | None = Query(None, description="True=playground (attora_test* subscribers), False=real clients only, None=all"),
     source_type: str | None = Query(None, pattern="^(paid|organic)$"),
     keywords: str | None = Query(None, description="Comma-separated campaign keywords to filter organic conversations."),
+    campaign_id: str | None = Query(None, description="Scope to one paid meta campaign_id."),
+    attora_campaign_id: uuid.UUID | None = Query(None, description="Scope to one organic Attora campaign UUID."),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
 ) -> PaginatedResponse[ConversationListItem]:
@@ -168,6 +191,8 @@ async def list_conversations(
         is_test=is_test,
         source_type=source_type,
         keywords=parsed_keywords,
+        campaign_id=campaign_id,
+        attora_campaign_id=attora_campaign_id,
     )
 
     # Count total
@@ -185,6 +210,8 @@ async def list_conversations(
         is_test=is_test,
         source_type=source_type,
         keywords=parsed_keywords,
+        campaign_id=campaign_id,
+        attora_campaign_id=attora_campaign_id,
     )
 
     total_result = await db.execute(count_query)

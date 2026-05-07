@@ -217,9 +217,7 @@ def _subscriber_campaign_clause(
 
     Priority:
     - attora_campaign_id (specific organic) → strict match on that one campaign
-    - campaign_id (specific paid) → that meta_campaign_id + organic NULL
-      (legacy semantic that credits organic-driven qualifications to the
-      running paid campaign)
+    - campaign_id (specific paid) → strict match on that meta_campaign_id
     - source_type aggregate (paid/organic) → IN (campaigns of that type).
       For organic this is "any organic campaign in the org"; for paid it
       excludes purely organic-attributed subscribers from the count.
@@ -227,7 +225,7 @@ def _subscriber_campaign_clause(
     if attora_campaign_id is not None:
         return Subscriber.attora_campaign_id == attora_campaign_id
     if campaign_id is not None:
-        return or_(Subscriber.campaign_id == campaign_id, Subscriber.campaign_id.is_(None))
+        return Subscriber.campaign_id == campaign_id
     if source_type is not None and org_id is not None:
         return Subscriber.attora_campaign_id.in_(
             _campaigns_of_source_type_subquery(org_id, source_type)
@@ -249,10 +247,7 @@ def _conversion_event_campaign_clause(
     if attora_campaign_id is not None:
         return ConversionEvent.attora_campaign_id == attora_campaign_id
     if campaign_id is not None:
-        return or_(
-            ConversionEvent.meta_campaign_id == campaign_id,
-            ConversionEvent.meta_campaign_id.is_(None),
-        )
+        return ConversionEvent.meta_campaign_id == campaign_id
     if source_type is not None and org_id is not None:
         return ConversionEvent.attora_campaign_id.in_(
             _campaigns_of_source_type_subquery(org_id, source_type)
@@ -269,6 +264,7 @@ async def get_analytics(
     campaign_id: str | None = None,
     attora_campaign_id: uuid.UUID | None = None,
     source_type: str | None = None,
+    is_test: bool | None = None,
 ) -> AnalyticsResponse:
     """Compute aggregated analytics metrics for a date range."""
     # source_type is ignored when a specific campaign is selected — the more
@@ -320,6 +316,7 @@ async def get_analytics(
             campaign_id=campaign_id,
             attora_campaign_id=attora_campaign_id,
             source_type=source_type,
+            is_test=is_test,
         )
 
         # Conversions + revenue from ConversionEvent scoped to the same filter.
@@ -343,7 +340,9 @@ async def get_analytics(
         total_conversions = int(conv_row.converted_count)
         total_revenue = float(conv_row.revenue)
     else:
-        total_conversations = await _count_conversations_raw(db, org_id, date_from, date_to, channel)
+        total_conversations = await _count_conversations_raw(
+            db, org_id, date_from, date_to, channel, is_test=is_test
+        )
         total_conversions = int(row.total_conversions)
         total_revenue = float(row.total_revenue)
     avg_response_time_ms = int(row.avg_response_time_ms) if row.avg_response_time_ms else None
@@ -433,7 +432,7 @@ async def get_analytics(
     ]
     # When scoped to a campaign or source aggregate, apply the per-campaign
     # Subscriber clause:
-    #   - paid (campaign_id):     campaign + organic NULL  (legacy semantic)
+    #   - paid (campaign_id):     strict campaign_id match only
     #   - organic (attora_campaign_id): only that one Attora campaign
     #   - source_type aggregate: any campaign of that source_type in the org
     sub_clause = _subscriber_campaign_clause(
@@ -469,6 +468,7 @@ async def get_analytics(
         campaign_id,
         attora_campaign_id,
         source_type,
+        is_test,
     )
     cost_per_purchase = hyros_cost_per_purchase_safe(total_ad_spend, purchases_count)
     cost_per_conversation = hyros_cost_per_conversation_safe(
@@ -694,7 +694,7 @@ async def _compute_daily_ccr_trend(
     Org-wide: from daily_analytics (channel=NULL combined row).
     Campaign-scoped: counts conversions from ConversionEvent and
     conversations from Conversation routed via Subscriber.campaign_id —
-    matches the per-campaign semantic used elsewhere (campaign + organic).
+    strict match to the selected campaign.
 
     Days with no conversations emit value=None so the chart shows gaps
     instead of misleading flat zeros.
@@ -1027,6 +1027,7 @@ async def _count_conversations_raw(
     date_from: date,
     date_to: date,
     channel: str | None = None,
+    is_test: bool | None = None,
 ) -> int:
     """Count conversations directly from the conversations table for consistency with /api/conversations."""
     dt_from = datetime(date_from.year, date_from.month, date_from.day, tzinfo=timezone.utc)
@@ -1049,6 +1050,13 @@ async def _count_conversations_raw(
             query = query.where(Conversation.channel == ChannelType(channel))
         except ValueError:
             pass
+
+    if is_test is not None:
+        query = query.join(Subscriber, Subscriber.id == Conversation.subscriber_id)
+        if is_test:
+            query = query.where(Subscriber.manychat_subscriber_id.like("attora_test%"))
+        else:
+            query = query.where(~Subscriber.manychat_subscriber_id.like("attora_test%"))
 
     result = await db.execute(query)
     return int(result.scalar() or 0)
@@ -1087,6 +1095,7 @@ async def _count_distinct_subscribers_conversation_started_in_range(
     campaign_id: str | None,
     attora_campaign_id: uuid.UUID | None,
     source_type: str | None,
+    is_test: bool | None,
 ) -> int:
     """Distinct subscribers with at least one conversation started in range."""
     conv_start = func.coalesce(Conversation.started_at, Conversation.created_at)
@@ -1101,6 +1110,12 @@ async def _count_distinct_subscribers_conversation_started_in_range(
             where_clauses.append(Conversation.channel == ChannelType(channel))
         except ValueError:
             pass
+
+    if is_test is not None:
+        if is_test:
+            where_clauses.append(Subscriber.manychat_subscriber_id.like("attora_test%"))
+        else:
+            where_clauses.append(~Subscriber.manychat_subscriber_id.like("attora_test%"))
 
     sub_clause = _subscriber_campaign_clause(
         campaign_id, attora_campaign_id, org_id=org_id, source_type=source_type
@@ -1125,14 +1140,15 @@ async def _count_conversations_for_campaign(
     campaign_id: str | None,
     attora_campaign_id: uuid.UUID | None = None,
     source_type: str | None = None,
+    is_test: bool | None = None,
 ) -> int:
     """Count conversations whose subscriber is attributed to this campaign.
 
     Routes through Subscriber attribution since Conversation has no direct
-    campaign link. For paid (campaign_id) we include organic NULL to match
-    the existing 'campaign + organic' semantic; for organic we strictly
-    scope to the one attora_campaign_id; for source_type aggregate we scope
-    to all campaigns of that source type in the org.
+    campaign link. For paid (campaign_id) we use strict match on that
+    campaign; for organic we strictly scope to the one attora_campaign_id;
+    for source_type aggregate we scope to all campaigns of that source type
+    in the org.
     """
     activity_ts = func.coalesce(Conversation.last_activity_at, Conversation.created_at)
     sub_clause = _subscriber_campaign_clause(
@@ -1143,6 +1159,11 @@ async def _count_conversations_for_campaign(
         activity_ts >= dt_from,
         activity_ts <= dt_to,
     ]
+    if is_test is not None:
+        if is_test:
+            where_clauses.append(Subscriber.manychat_subscriber_id.like("attora_test%"))
+        else:
+            where_clauses.append(~Subscriber.manychat_subscriber_id.like("attora_test%"))
     if sub_clause is not None:
         where_clauses.append(sub_clause)
     result = await db.execute(

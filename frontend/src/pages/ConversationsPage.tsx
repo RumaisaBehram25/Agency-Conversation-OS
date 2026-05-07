@@ -12,11 +12,14 @@ import { daysAgoISO, todayISO } from '../utils/formatters';
 
 const LS_KEY = 'attora_source_filter';
 
-function readSourceFromStorage(): boolean {
+function readSourceFromStorage(): boolean | undefined {
   try {
-    return localStorage.getItem(LS_KEY) === 'true';
+    const value = localStorage.getItem(LS_KEY);
+    if (value === 'true') return true;
+    if (value === 'false') return false;
+    return undefined;
   } catch {
-    return false;
+    return undefined;
   }
 }
 
@@ -39,7 +42,7 @@ function resolveSourceType(urlParam: string | null): 'paid' | 'organic' | undefi
   return undefined;
 }
 
-function resolveIsTest(urlParam: string | null): boolean {
+function resolveIsTest(urlParam: string | null): boolean | undefined {
   if (urlParam === 'true') return true;
   if (urlParam === 'false') return false;
   return readSourceFromStorage();
@@ -56,6 +59,8 @@ export default function ConversationsPage() {
     is_test: resolveIsTest(searchParams.get('is_test')),
     source_type: resolveSourceType(searchParams.get('source_type')),
     keywords: searchParams.get('keywords') || undefined,
+    campaign_id: searchParams.get('campaign_id') || undefined,
+    attora_campaign_id: searchParams.get('attora_campaign_id') || undefined,
     page: Number(searchParams.get('page') || 1),
     page_size: Number(searchParams.get('page_size') || 20),
   });
@@ -72,15 +77,23 @@ export default function ConversationsPage() {
     if (filters.channel) params.set('channel', filters.channel);
     if (filters.date_from) params.set('date_from', filters.date_from);
     if (filters.date_to) params.set('date_to', filters.date_to);
-    params.set('is_test', String(filters.is_test));
+    if (filters.is_test !== undefined) {
+      params.set('is_test', String(filters.is_test));
+    }
     if (filters.source_type) params.set('source_type', filters.source_type);
     if (filters.keywords) params.set('keywords', filters.keywords);
+    if (filters.campaign_id) params.set('campaign_id', filters.campaign_id);
+    if (filters.attora_campaign_id) params.set('attora_campaign_id', filters.attora_campaign_id);
     if (filters.page) params.set('page', String(filters.page));
     if (filters.page_size) params.set('page_size', String(filters.page_size));
     setSearchParams(params, { replace: true });
 
     try {
-      localStorage.setItem(LS_KEY, String(filters.is_test));
+      if (filters.is_test === undefined) {
+        localStorage.removeItem(LS_KEY);
+      } else {
+        localStorage.setItem(LS_KEY, String(filters.is_test));
+      }
     } catch {
       // ignore storage errors
     }
@@ -89,7 +102,10 @@ export default function ConversationsPage() {
   const conversations = data?.items ?? [];
   const total = data?.total ?? 0;
 
-  function updateFilter(key: keyof ConversationFilters, value: string | number | boolean) {
+  function updateFilter(
+    key: keyof ConversationFilters,
+    value: string | number | boolean | undefined
+  ) {
     setFilters((prev) => ({
       ...prev,
       [key]: value,
@@ -130,9 +146,20 @@ export default function ConversationsPage() {
           <div className="flex rounded-lg border border-gray-200 bg-gray-100 p-1">
             <button
               type="button"
+              onClick={() => updateFilter('is_test', undefined)}
+              className={`rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${
+                filters.is_test === undefined
+                  ? 'bg-white text-gray-900 shadow-sm'
+                  : 'text-gray-500 hover:text-gray-700'
+              }`}
+            >
+              All
+            </button>
+            <button
+              type="button"
               onClick={() => updateFilter('is_test', false)}
               className={`rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${
-                !filters.is_test
+                filters.is_test === false
                   ? 'bg-white text-gray-900 shadow-sm'
                   : 'text-gray-500 hover:text-gray-700'
               }`}

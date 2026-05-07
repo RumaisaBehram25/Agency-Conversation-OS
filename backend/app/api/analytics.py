@@ -67,6 +67,10 @@ async def analytics_overview(
             "when campaign_id or attora_campaign_id is also set."
         ),
     ),
+    is_test: bool | None = Query(
+        None,
+        description="Filter conversations by test subscribers (attora_test*). True=test only, False=real only, None=all.",
+    ),
 ) -> AnalyticsResponse:
     """
     Get aggregated analytics metrics for a date range.
@@ -78,7 +82,15 @@ async def analytics_overview(
     qualifications, with organic counted at $0 spend.
     """
     return await get_analytics(
-        db, org_id, date_from, date_to, channel, campaign_id, attora_campaign_id, source_type
+        db=db,
+        org_id=org_id,
+        date_from=date_from,
+        date_to=date_to,
+        channel=channel,
+        campaign_id=campaign_id,
+        attora_campaign_id=attora_campaign_id,
+        source_type=source_type,
+        is_test=is_test,
     )
 
 

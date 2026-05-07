@@ -9,7 +9,6 @@ import {
   getOrganicKeywordStats,
   getHyrosSourceBreakdown,
 } from '../api/analytics';
-import { getConversations } from '../api/conversations';
 import { getCampaigns, listAdCampaigns } from '../api/campaigns';
 import { syncMetaNow, getMetaSyncStatus } from '../api/settings';
 import type { AdCampaign, CampaignSourceType, CampaignSummary, HyrosSourceBreakdownRow } from '../types';
@@ -24,7 +23,8 @@ import CampaignDrillDown from '../components/analytics/CampaignDrillDown';
 import DateRangePicker from '../components/ui/DateRangePicker';
 import Button from '../components/ui/Button';
 import LoadingSpinner from '../components/ui/LoadingSpinner';
-import { daysAgoISO, todayISO, formatPercentRaw, formatDuration, formatCurrency } from '../utils/formatters';
+import { daysAgoISO, todayISO, formatPercentRaw, formatCurrency } from '../utils/formatters';
+import { resolveTotalConversations } from './analyticsScope';
 import {
   LineChart,
   Line,
@@ -154,11 +154,6 @@ export default function AnalyticsPage() {
     queryKey: ['ai-performance', dateRange],
     queryFn: () => getAIPerformance(dateRange),
   });
-  const conversationsQuery = useQuery({
-    queryKey: ['conversations-count', dateRange],
-    queryFn: () => getConversations({ ...dateRange, page: 1, page_size: 1 }),
-  });
-
   const organicKeywordQuery = useQuery({
     queryKey: ['organic-keyword-stats', dateRange, organicStatsKeyword],
     queryFn: () => getOrganicKeywordStats({ ...dateRange, keyword: organicStatsKeyword }),
@@ -170,7 +165,6 @@ export default function AnalyticsPage() {
   const analytics = analyticsQuery.data ?? null;
   const roi = roiQuery.data ?? null;
   const aiPerf = aiPerfQuery.data ?? null;
-  const conversationsTotal = conversationsQuery.data?.total ?? null;
   const organicStats = sourceFilter === 'organic' ? organicKeywordQuery.data : null;
   const organicFunnelSteps = organicStats
     ? [
@@ -198,11 +192,11 @@ export default function AnalyticsPage() {
       ]
     : null;
   const loading =
-    analyticsQuery.isLoading || roiQuery.isLoading || aiPerfQuery.isLoading || conversationsQuery.isLoading;
+    analyticsQuery.isLoading || roiQuery.isLoading || aiPerfQuery.isLoading;
   const isFirstLoad =
     loading && (!analytics || !roi || !aiPerf);
   const error =
-    analyticsQuery.isError || roiQuery.isError || aiPerfQuery.isError || conversationsQuery.isError
+    analyticsQuery.isError || roiQuery.isError || aiPerfQuery.isError
       ? 'Failed to load analytics data'
       : '';
 
@@ -215,7 +209,6 @@ export default function AnalyticsPage() {
         queryKey: ['roi', dateRange, selectedCampaign, selectedCampaignSource, sourceFilter],
       }),
       queryClient.invalidateQueries({ queryKey: ['ai-performance', dateRange] }),
-      queryClient.invalidateQueries({ queryKey: ['conversations-count', dateRange] }),
       queryClient.invalidateQueries({ queryKey: ['campaigns-for-analytics', campaignQueryParams] }),
       queryClient.invalidateQueries({ queryKey: ['ad-campaigns-organic'] }),
       queryClient.invalidateQueries({ queryKey: ['organic-keyword-stats', dateRange] }),
@@ -371,8 +364,20 @@ export default function AnalyticsPage() {
       date_from: dateFrom,
       date_to: dateTo,
     });
+    if (selectedCampaign) {
+      if (selectedCampaignSource === 'organic') {
+        params.set('attora_campaign_id', selectedCampaign);
+        params.set('source_type', 'organic');
+      } else {
+        params.set('campaign_id', selectedCampaign);
+        params.set('source_type', 'paid');
+      }
+      return `/conversations?${params.toString()}`;
+    }
+    if (sourceFilter !== 'all') {
+      params.set('source_type', sourceFilter);
+    }
     if (sourceFilter === 'organic') {
-      params.set('source_type', 'organic');
       params.set('keywords', organicConversationKeywords ?? 'MACROS,MUSCLES');
     }
     return `/conversations?${params.toString()}`;
@@ -570,7 +575,6 @@ export default function AnalyticsPage() {
             <AnalyticsMetricCards
               cpqc={analytics.cpqc}
               ccr={analytics.ccr}
-              avgResponseTimeMs={analytics.avg_response_time_ms}
               qualificationRate={analytics.qualification_rate}
               hyrosConfirmedPurchases={analytics.hyros_confirmed_purchases}
               costPerPurchase={analytics.cost_per_purchase}
@@ -594,9 +598,10 @@ export default function AnalyticsPage() {
 
           {/* Summary Stats */}
           {analytics && (() => {
-            const statConversations = organicStats != null
-              ? organicStats.total_conversations
-              : (conversationsTotal ?? analytics.total_conversations);
+            const statConversations = resolveTotalConversations(
+              analytics.total_conversations,
+              organicStats?.total_conversations
+            );
             const statConversions = organicStats != null
               ? organicStats.total_conversions
               : analytics.total_conversions;
@@ -735,12 +740,6 @@ export default function AnalyticsPage() {
                   <p className="text-xs text-gray-500">Fallback Rate</p>
                   <p className="text-xl font-bold text-gray-900">
                     {aiPerf.fallback_rate != null ? formatPercentRaw(aiPerf.fallback_rate * 100) : '—'}
-                  </p>
-                </div>
-                <div>
-                  <p className="text-xs text-gray-500">Avg Response Time</p>
-                  <p className="text-xl font-bold text-gray-900">
-                    {aiPerf.avg_response_time_ms != null ? formatDuration(aiPerf.avg_response_time_ms) : '—'}
                   </p>
                 </div>
                 <div>

@@ -2,8 +2,6 @@ import { useState, useEffect, useCallback } from 'react';
 import Button from '../ui/Button';
 import Input from '../ui/Input';
 import Pagination from '../ui/Pagination';
-import { syncHyrosNow } from '../../api/settings';
-import type { HyrosSyncResult } from '../../api/settings';
 import type { HyrosSyncHealthResponse, SettingsResponse, SettingsUpdate } from '../../types';
 import { getHyrosSyncHealth } from '../../api/analytics';
 
@@ -35,9 +33,6 @@ export default function SettingsForm({ settings, onSave }: SettingsFormProps) {
   const [loading, setLoading] = useState(false);
   const [toast, setToast] = useState('');
   const [error, setError] = useState('');
-  const [hyrosSyncing, setHyrosSyncing] = useState(false);
-  const [hyrosResult, setHyrosResult] = useState<HyrosSyncResult | null>(null);
-  const [hyrosError, setHyrosError] = useState('');
   const [hyrosHealth, setHyrosHealth] = useState<HyrosSyncHealthResponse | null>(null);
   const [hyrosHealthLoading, setHyrosHealthLoading] = useState(false);
   const [hyrosSyncRunsPage, setHyrosSyncRunsPage] = useState(1);
@@ -63,27 +58,6 @@ export default function SettingsForm({ settings, onSave }: SettingsFormProps) {
     );
     setHyrosSyncRunsPage((p) => Math.min(p, totalPages));
   }, [hyrosHealth?.sync_runs]);
-
-  async function handleHyrosSync() {
-    setHyrosSyncing(true);
-    setHyrosError('');
-    setHyrosResult(null);
-    try {
-      const result = await syncHyrosNow();
-      setHyrosResult(result);
-      setHyrosSyncRunsPage(1);
-      await refreshHyrosHealth();
-    } catch (e: unknown) {
-      const msg =
-        e && typeof e === 'object' && 'response' in e
-          ? // @ts-expect-error axios response shape
-            e.response?.data?.detail ?? 'Hyros sync failed'
-          : 'Hyros sync failed';
-      setHyrosError(String(msg));
-    } finally {
-      setHyrosSyncing(false);
-    }
-  }
 
   useEffect(() => {
     void refreshHyrosHealth();
@@ -227,7 +201,7 @@ export default function SettingsForm({ settings, onSave }: SettingsFormProps) {
 
       {/* Hyros Section */}
       <div className="mb-8 border-t border-gray-200 pt-8">
-        <div className="mb-4 flex items-center justify-between gap-2">
+        <div className="mb-4 flex items-center gap-2">
           <div className="flex items-center gap-2">
             <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-emerald-100">
               <svg className="h-4 w-4 text-emerald-600" fill="none" viewBox="0 0 24 24" strokeWidth="1.5" stroke="currentColor">
@@ -236,21 +210,6 @@ export default function SettingsForm({ settings, onSave }: SettingsFormProps) {
             </div>
             <h3 className="text-base font-semibold text-gray-900">Hyros</h3>
           </div>
-          <Button
-            type="button"
-            variant="secondary"
-            size="sm"
-            onClick={() => void handleHyrosSync()}
-            loading={hyrosSyncing}
-            disabled={hyrosSyncing || !settings.hyros_api_key}
-            title={
-              !settings.hyros_api_key
-                ? 'Save a Hyros API key first, then run a sync.'
-                : 'Pull the latest leads + sales from Hyros and match against your subscribers.'
-            }
-          >
-            {hyrosSyncing ? 'Syncing…' : 'Sync now'}
-          </Button>
         </div>
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           <Input
@@ -263,11 +222,6 @@ export default function SettingsForm({ settings, onSave }: SettingsFormProps) {
             className="sm:col-span-2"
           />
         </div>
-        {hyrosError && (
-          <div className="mt-3 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
-            {hyrosError}
-          </div>
-        )}
         {settings.hyros_api_key && (
           <div className="mt-3 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-3 text-sm text-emerald-900">
             <div className="font-medium text-emerald-950">Hyros sync visibility</div>
@@ -296,8 +250,7 @@ export default function SettingsForm({ settings, onSave }: SettingsFormProps) {
                 </div>
                 {hyrosHealth.sync_runs.length === 0 ? (
                   <p className="mt-2 text-xs text-emerald-800">
-                    No sync runs logged yet — run Sync now or wait for the scheduled job (after DB
-                    migration).
+                    No sync runs logged yet — wait for the scheduled job.
                   </p>
                 ) : (
                   <div className="mt-3 overflow-hidden rounded border border-emerald-100/80 bg-white/60">
@@ -368,57 +321,6 @@ export default function SettingsForm({ settings, onSave }: SettingsFormProps) {
               </>
             ) : null}
 
-            {hyrosResult && !hyrosResult.skipped && (
-              <>
-                <div className="mt-4 border-t border-emerald-200/90 pt-3 text-emerald-800">
-                  <div className="font-medium text-emerald-950">Latest manual sync</div>
-                  <div className="mt-1 grid grid-cols-2 gap-x-4 gap-y-0.5 text-xs sm:grid-cols-3">
-                    <div>
-                      Subscribers scanned: <strong>{hyrosResult.subscribers_scanned}</strong>
-                    </div>
-                    <div>
-                      Sales scanned: <strong>{hyrosResult.sales_scanned}</strong>
-                    </div>
-                    <div>
-                      Purchases matched: <strong>{hyrosResult.purchases_found}</strong>
-                    </div>
-                    <div>
-                      Purchase match rate:{' '}
-                      <strong>
-                        {hyrosResult.sales_scanned > 0
-                          ? `${((100 * hyrosResult.purchases_found) / hyrosResult.sales_scanned).toFixed(1)}%`
-                          : '—'}
-                      </strong>
-                    </div>
-                    <div>
-                      Total lead matches: <strong>{hyrosResult.total_matched}</strong>
-                    </div>
-                    <div>
-                      Matched by attora_id:{' '}
-                      <strong>{hyrosResult.matched_by_attora_id ?? 0}</strong>
-                    </div>
-                    <div>
-                      Matched by attora_sub:{' '}
-                      <strong>{hyrosResult.matched_by_attora_sub ?? 0}</strong>
-                    </div>
-                    <div>
-                      Matched by email: <strong>{hyrosResult.matched_by_email}</strong>
-                    </div>
-                    <div>
-                      Matched by name: <strong>{hyrosResult.matched_by_name}</strong>
-                    </div>
-                    <div>
-                      Unmatched Hyros purchases (no subscriber):{' '}
-                      <strong>{hyrosResult.unmatched_sales ?? 0}</strong>
-                    </div>
-                    <div>
-                      Unmatched Hyros leads:{' '}
-                      <strong>{hyrosResult.unmatched_hyros_leads}</strong>
-                    </div>
-                  </div>
-                </div>
-              </>
-            )}
           </div>
         )}
       </div>

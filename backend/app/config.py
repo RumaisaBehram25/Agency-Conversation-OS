@@ -102,7 +102,7 @@ class Settings(BaseSettings):
     hyros_sync_scheduler_enabled: bool = False
     hyros_sync_scheduler_cron: str = "0 */3 * * *"
 
-    # ── Follow-up dispatcher (per-org; needs manychat_outbound_flow_ns set) ──
+    # ── Follow-up dispatcher (per-org; needs manychat_api_key + channel flow NS) ──
     follow_up_scheduler_enabled: bool = False
     follow_up_scheduler_cron: str = "*/15 * * * *"
 

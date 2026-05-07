@@ -31,9 +31,13 @@ class Organization(Base, TimestampMixin):
     manychat_page_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     manychat_account_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     # Namespace of the dumb "send-this-text" outbound flow in this org's
-    # ManyChat. Attora calls trigger_flow with `attora_outbound_message`
-    # set; ManyChat just delivers it. NULL → follow-ups disabled for org.
+    # ManyChat (Messenger / default). Attora sets `attora_outbound_message`
+    # then trigger_flow; ManyChat delivers it. Per-channel NS required at send time.
     manychat_outbound_flow_ns: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    manychat_outbound_flow_ns_instagram: Mapped[str | None] = mapped_column(
+        String(255),
+        nullable=True,
+    )
 
     # ── Meta Configuration ───────────────────────────────────
     meta_pixel_id: Mapped[str | None] = mapped_column(String(255), nullable=True)

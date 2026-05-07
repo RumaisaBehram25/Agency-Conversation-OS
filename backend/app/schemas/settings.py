@@ -22,6 +22,8 @@ class SettingsResponse(BaseModel):
     manychat_api_key: str | None = None
     manychat_page_id: str | None = None
     manychat_account_id: str | None = None
+    manychat_outbound_flow_ns: str | None = None
+    manychat_outbound_flow_ns_instagram: str | None = None
 
     # Meta (CAPI token masked)
     meta_pixel_id: str | None = None
@@ -50,6 +52,8 @@ class SettingsUpdate(BaseModel):
     manychat_api_key: str | None = None
     manychat_page_id: str | None = None
     manychat_account_id: str | None = None
+    manychat_outbound_flow_ns: str | None = None
+    manychat_outbound_flow_ns_instagram: str | None = None
 
     # Meta config
     meta_pixel_id: str | None = None

@@ -18,9 +18,9 @@ When the user replies inbound (handled in `services/context_manager.py`),
 again gets the full sequence over.
 
 Outbound transport: ManyChat's "open" flow — Attora sets a custom field
-`attora_outbound_message` on the subscriber, then triggers the org's
-`manychat_outbound_flow_ns`. ManyChat just delivers the field's contents.
-Org-level config: `Organization.manychat_outbound_flow_ns`.
+`attora_outbound_message` on the subscriber, then triggers the channel-specific
+flow NS (`manychat_outbound_flow_ns` for Messenger/default,
+`manychat_outbound_flow_ns_instagram` for Instagram).
 """
 
 from __future__ import annotations
@@ -121,13 +121,26 @@ async def _send_via_manychat(
     message: str,
 ) -> bool:
     """Set the outbound custom field on the subscriber, then trigger the
-    org's open flow. Returns True on apparent success."""
-    if not org.manychat_api_key or not org.manychat_outbound_flow_ns:
+    channel-specific open flow. Returns True on apparent success."""
+    if not org.manychat_api_key:
         return False
     try:
         api_key = decrypt_value(org.manychat_api_key)
     except Exception:
         logger.warning("Failed to decrypt manychat_api_key for org=%s", org.id)
+        return False
+
+    if subscriber.channel == "instagram":
+        flow_ns = org.manychat_outbound_flow_ns_instagram
+    else:
+        flow_ns = org.manychat_outbound_flow_ns
+
+    if not flow_ns:
+        logger.warning(
+            "[FOLLOWUP] No flow_ns configured for channel=%s org=%s",
+            subscriber.channel,
+            org.id,
+        )
         return False
 
     adapter = ManyChatAdapter(api_key=api_key)
@@ -138,7 +151,7 @@ async def _send_via_manychat(
         )
         await adapter.trigger_flow(
             subscriber_id=subscriber.manychat_subscriber_id,
-            flow_ns=org.manychat_outbound_flow_ns,
+            flow_ns=flow_ns,
         )
         return True
     except Exception as exc:
@@ -253,10 +266,7 @@ async def dispatch_follow_ups(db: AsyncSession) -> dict:
     now = datetime.now(timezone.utc)
 
     orgs_q = await db.execute(
-        select(Organization).where(
-            Organization.manychat_api_key.isnot(None),
-            Organization.manychat_outbound_flow_ns.isnot(None),
-        )
+        select(Organization).where(Organization.manychat_api_key.isnot(None))
     )
     orgs = orgs_q.scalars().all()
 

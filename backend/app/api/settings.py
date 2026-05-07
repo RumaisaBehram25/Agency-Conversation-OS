@@ -63,6 +63,8 @@ def _org_to_settings_response(org: Organization) -> SettingsResponse:
         manychat_api_key=manychat_api_key_masked,
         manychat_page_id=org.manychat_page_id,
         manychat_account_id=org.manychat_account_id,
+        manychat_outbound_flow_ns=org.manychat_outbound_flow_ns,
+        manychat_outbound_flow_ns_instagram=org.manychat_outbound_flow_ns_instagram,
         meta_pixel_id=org.meta_pixel_id,
         meta_capi_token=meta_capi_token_masked,
         meta_ad_account_id=org.meta_ad_account_id,

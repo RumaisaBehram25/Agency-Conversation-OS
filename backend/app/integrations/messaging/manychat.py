@@ -18,7 +18,6 @@ logger = logging.getLogger(__name__)
 
 # ManyChat API configuration
 _MANYCHAT_API_BASE = "https://api.manychat.com/fb"
-_MANYCHAT_INSTAGRAM_API_BASE = "https://api.manychat.com/instagram"
 _DEFAULT_TIMEOUT = 10.0  # seconds
 
 
@@ -69,25 +68,6 @@ class ManyChatAdapter(MessagingAdapter):
             ]
 
         return await self._post("/sending/sendContent", payload)
-
-    async def send_instagram_message(
-        self,
-        subscriber_id: str,
-        text: str,
-    ) -> dict[str, Any]:
-        """Send a text message to an Instagram subscriber via ManyChat."""
-        payload: dict[str, Any] = {
-            "subscriber_id": subscriber_id,
-            "data": {
-                "version": "v2",
-                "content": {
-                    "messages": [
-                        {"type": "text", "text": text}
-                    ],
-                },
-            },
-        }
-        return await self._post_instagram("/sending/sendContent", payload)
 
     async def get_subscriber_info(
         self,
@@ -151,46 +131,13 @@ class ManyChatAdapter(MessagingAdapter):
 
         except httpx.HTTPStatusError as e:
             logger.error(
-                "ManyChat API error: POST %s -> %s: %s",
-                endpoint,
-                e.response.status_code,
-                e.response.text,
+                f"ManyChat API error: POST {endpoint} -> {e.response.status_code}: "
+                f"{e.response.text[:500]}"
             )
             raise
 
         except Exception as e:
             logger.error(f"ManyChat API request failed: POST {endpoint}: {e}")
-            raise
-
-    async def _post_instagram(self, endpoint: str, payload: dict) -> dict[str, Any]:
-        """POST to ManyChat Instagram API (e.g. /instagram/sending/sendContent)."""
-        url = f"{_MANYCHAT_INSTAGRAM_API_BASE}{endpoint}"
-
-        try:
-            async with httpx.AsyncClient(timeout=self._timeout) as client:
-                response = await client.post(
-                    url,
-                    json=payload,
-                    headers=self._headers,
-                )
-                response.raise_for_status()
-                return response.json()
-
-        except httpx.TimeoutException:
-            logger.error(f"ManyChat Instagram API timeout: POST {endpoint}")
-            raise
-
-        except httpx.HTTPStatusError as e:
-            logger.error(
-                "ManyChat Instagram API error: POST %s -> %s: %s",
-                endpoint,
-                e.response.status_code,
-                e.response.text,
-            )
-            raise
-
-        except Exception as e:
-            logger.error(f"ManyChat Instagram API request failed: POST {endpoint}: {e}")
             raise
 
     async def _get(

@@ -199,21 +199,11 @@ async def cron_hyros_sync(
 async def cron_follow_ups(
     _: None = Depends(verify_cron_secret),
     db: AsyncSession = Depends(get_db),
-    dry_run: bool = Query(
-        False,
-        description="If true, logs would-send touches only; skips ManyChat and DB writes for nudges",
-    ),
 ) -> dict:
     """
     Dispatch due follow-up nudges to silent, unbought subscribers via
     ManyChat's open outbound flow. Recommended cadence: every 15 minutes.
-
-    Query param ``dry_run=true``: same scans and skip logs; no outbound send,
-    messages, or follow_up_attempt updates; rolls back session.
     """
-    summary = await dispatch_follow_ups(db, dry_run=dry_run)
-    if dry_run:
-        await db.rollback()
-    else:
-        await db.commit()
+    summary = await dispatch_follow_ups(db)
+    await db.commit()
     return summary

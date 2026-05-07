@@ -203,13 +203,11 @@ async def _load_subscriber_tagged_urls_with_product(
             utm_c,
             utm_s,
         )
-    except Exception:
-        logger.exception(
-            "_load_subscriber_tagged_urls_with_product failed org_id=%s "
-            "attora_campaign_id=%s subscriber_id=%s",
-            org_id,
+    except Exception as e:
+        logger.warning(
+            "Failed to load per-subscriber UTM URLs for campaign %s: %s",
             attora_campaign_id,
-            subscriber_id,
+            e,
         )
         return {}, None, None, None
 

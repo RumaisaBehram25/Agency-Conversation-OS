@@ -497,6 +497,8 @@ export interface SettingsResponse {
   manychat_api_key: string;
   manychat_page_id: string;
   manychat_account_id: string;
+  manychat_outbound_flow_ns?: string | null;
+  manychat_outbound_flow_ns_instagram?: string | null;
   meta_pixel_id: string;
   meta_capi_token: string;
   meta_ad_account_id: string;
@@ -511,6 +513,8 @@ export interface SettingsUpdate {
   manychat_api_key?: string;
   manychat_page_id?: string;
   manychat_account_id?: string;
+  manychat_outbound_flow_ns?: string;
+  manychat_outbound_flow_ns_instagram?: string;
   meta_pixel_id?: string;
   meta_capi_token?: string;
   meta_ad_account_id?: string;

@@ -23,6 +23,8 @@ export default function SettingsForm({ settings, onSave }: SettingsFormProps) {
     manychat_api_key: '',
     manychat_page_id: '',
     manychat_account_id: '',
+    manychat_outbound_flow_ns: '',
+    manychat_outbound_flow_ns_instagram: '',
     meta_pixel_id: '',
     meta_capi_token: '',
     meta_ad_account_id: '',
@@ -68,6 +70,9 @@ export default function SettingsForm({ settings, onSave }: SettingsFormProps) {
       manychat_api_key: settings.manychat_api_key || '',
       manychat_page_id: settings.manychat_page_id || '',
       manychat_account_id: settings.manychat_account_id || '',
+      manychat_outbound_flow_ns: settings.manychat_outbound_flow_ns ?? '',
+      manychat_outbound_flow_ns_instagram:
+        settings.manychat_outbound_flow_ns_instagram ?? '',
       meta_pixel_id: settings.meta_pixel_id || '',
       meta_capi_token: settings.meta_capi_token || '',
       meta_ad_account_id: settings.meta_ad_account_id || '',
@@ -148,6 +153,20 @@ export default function SettingsForm({ settings, onSave }: SettingsFormProps) {
             value={form.manychat_account_id || ''}
             onChange={(e) => updateField('manychat_account_id', e.target.value)}
             placeholder="ManyChat Account ID"
+          />
+          <Input
+            label="Outbound Flow NS (Messenger)"
+            value={form.manychat_outbound_flow_ns || ''}
+            onChange={(e) => updateField('manychat_outbound_flow_ns', e.target.value)}
+            placeholder="content20260507..."
+          />
+          <Input
+            label="Outbound Flow NS (Instagram)"
+            value={form.manychat_outbound_flow_ns_instagram || ''}
+            onChange={(e) =>
+              updateField('manychat_outbound_flow_ns_instagram', e.target.value)
+            }
+            placeholder="content20260504..."
           />
         </div>
       </div>

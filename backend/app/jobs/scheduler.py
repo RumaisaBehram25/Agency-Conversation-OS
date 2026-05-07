@@ -365,6 +365,24 @@ async def _run_follow_up_dispatch() -> None:
         logger.info("Scheduled follow-up dispatch result: %s", result)
 
 
+def build_follow_up_scheduler() -> AsyncIOScheduler:
+    """
+    APScheduler with only the follow-up dispatch job.
+
+    Used by the FastAPI app lifespan. OLAP / Hyros cron jobs stay in
+    ``python -m app.jobs.scheduler`` (see ``build_scheduler``).
+    """
+    scheduler = AsyncIOScheduler(timezone=settings.olap_scheduler_timezone)
+    scheduler.add_job(
+        _run_follow_up_dispatch,
+        CronTrigger.from_crontab(settings.follow_up_scheduler_cron, timezone=settings.olap_scheduler_timezone),
+        id="follow-up-dispatch",
+        replace_existing=True,
+        max_instances=1,
+    )
+    return scheduler
+
+
 async def _run_parity() -> None:
     org_ids = [uuid.UUID(value) for value in settings.olap_scheduler_parity_org_ids_list]
     async with async_session_factory() as session:
@@ -384,7 +402,10 @@ async def _run_parity() -> None:
 
 
 def build_scheduler() -> AsyncIOScheduler:
-    """Create APScheduler jobs for OLAP maintenance and Hyros purchase sync."""
+    """Create APScheduler jobs for OLAP maintenance and Hyros purchase sync (standalone container).
+
+    Follow-up dispatch is registered separately via ``build_follow_up_scheduler`` in the API process.
+    """
     scheduler = AsyncIOScheduler(timezone=settings.olap_scheduler_timezone)
     if settings.olap_scheduler_enabled:
         scheduler.add_job(_run_export_daily_analytics, CronTrigger.from_crontab(settings.olap_scheduler_export_daily_analytics_cron, timezone=settings.olap_scheduler_timezone), id="olap-export-daily-analytics", replace_existing=True, max_instances=1)
@@ -399,25 +420,13 @@ def build_scheduler() -> AsyncIOScheduler:
             replace_existing=True,
             max_instances=1,
         )
-    if settings.follow_up_scheduler_enabled:
-        scheduler.add_job(
-            _run_follow_up_dispatch,
-            CronTrigger.from_crontab(settings.follow_up_scheduler_cron, timezone=settings.olap_scheduler_timezone),
-            id="follow-up-dispatch",
-            replace_existing=True,
-            max_instances=1,
-        )
     return scheduler
 
 
 async def main() -> None:
     """Run the scheduler loop until the process is stopped."""
-    if (
-        not settings.olap_scheduler_enabled
-        and not settings.hyros_sync_scheduler_enabled
-        and not settings.follow_up_scheduler_enabled
-    ):
-        logger.info("OLAP, Hyros, and follow-up schedulers are all disabled; exiting")
+    if not settings.olap_scheduler_enabled and not settings.hyros_sync_scheduler_enabled:
+        logger.info("OLAP and Hyros schedulers are both disabled; exiting")
         return
 
     scheduler = build_scheduler()

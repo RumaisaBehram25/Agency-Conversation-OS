@@ -17,6 +17,7 @@ from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.config import settings
+from app.jobs.scheduler import build_follow_up_scheduler
 from app.olap import get_object_storage_adapter, get_query_adapter
 from app.redis import close_redis, init_redis
 from app.api import api_router
@@ -30,12 +31,17 @@ logging.basicConfig(
 )
 logger = logging.getLogger("attora")
 
+# Follow-up APScheduler when ``follow_up_scheduler_enabled`` (OLAP/Hyros stay in jobs container).
+scheduler = None
+
 
 # ── Lifecycle ────────────────────────────────────────────────
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """Application startup and shutdown lifecycle."""
+    global scheduler
+
     # Startup
     logger.info(f"Starting {settings.app_name} ({settings.app_env})")
     storage_adapter = get_object_storage_adapter()
@@ -54,9 +60,18 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     except Exception as e:
         logger.warning(f"Redis connection failed (non-fatal): {e}")
 
+    if settings.follow_up_scheduler_enabled:
+        scheduler = build_follow_up_scheduler()
+        scheduler.start()
+        logger.info("Follow-up scheduler started")
+
     yield
 
     # Shutdown
+    if scheduler is not None and scheduler.running:
+        scheduler.shutdown(wait=False)
+        logger.info("Follow-up scheduler stopped")
+
     logger.info("Shutting down...")
     await close_redis()
     logger.info("Redis connection pool closed")

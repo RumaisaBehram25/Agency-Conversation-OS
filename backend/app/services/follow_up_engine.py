@@ -29,6 +29,7 @@ import logging
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from typing import Literal
 
 from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -64,6 +65,7 @@ class FollowUpResult:
     skipped_threshold_not_met: int = 0
     skipped_sequence_complete: int = 0
     errors: int = 0
+    dry_run: bool = False
 
     def asdict(self) -> dict:
         return {
@@ -77,6 +79,7 @@ class FollowUpResult:
             "skipped_threshold_not_met": self.skipped_threshold_not_met,
             "skipped_sequence_complete": self.skipped_sequence_complete,
             "errors": self.errors,
+            "dry_run": self.dry_run,
         }
 
 
@@ -115,33 +118,36 @@ async def _last_outbound_was_ours(
     return last_sender in (MessageSender.AI, MessageSender.HUMAN)
 
 
+def _follow_up_flow_ns(org: Organization, subscriber: Subscriber) -> str | None:
+    """ManyChat outbound flow namespace for this subscriber's channel."""
+    if subscriber.channel == "instagram":
+        return org.manychat_outbound_flow_ns_instagram
+    return org.manychat_outbound_flow_ns
+
+
 async def _send_via_manychat(
     org: Organization,
     subscriber: Subscriber,
     message: str,
-) -> bool:
+) -> Literal["ok", "no_flow_ns", "failed"]:
     """Set the outbound custom field on the subscriber, then trigger the
-    channel-specific open flow. Returns True on apparent success."""
+    channel-specific open flow."""
     if not org.manychat_api_key:
-        return False
+        return "failed"
     try:
         api_key = decrypt_value(org.manychat_api_key)
     except Exception:
         logger.warning("Failed to decrypt manychat_api_key for org=%s", org.id)
-        return False
+        return "failed"
 
-    if subscriber.channel == "instagram":
-        flow_ns = org.manychat_outbound_flow_ns_instagram
-    else:
-        flow_ns = org.manychat_outbound_flow_ns
-
+    flow_ns = _follow_up_flow_ns(org, subscriber)
     if not flow_ns:
         logger.warning(
             "[FOLLOWUP] No flow_ns configured for channel=%s org=%s",
             subscriber.channel,
             org.id,
         )
-        return False
+        return "no_flow_ns"
 
     adapter = ManyChatAdapter(api_key=api_key)
     try:
@@ -153,7 +159,7 @@ async def _send_via_manychat(
             subscriber_id=subscriber.manychat_subscriber_id,
             flow_ns=flow_ns,
         )
-        return True
+        return "ok"
     except Exception as exc:
         logger.warning(
             "Follow-up dispatch failed (org=%s, sub=%s): %s",
@@ -161,7 +167,7 @@ async def _send_via_manychat(
             subscriber.manychat_subscriber_id,
             exc,
         )
-        return False
+        return "failed"
 
 
 async def _process_subscriber(
@@ -171,6 +177,8 @@ async def _process_subscriber(
     rules: list[CampaignFollowUp],
     now: datetime,
     result: FollowUpResult,
+    *,
+    dry_run: bool,
 ) -> None:
     result.subscribers_scanned += 1
 
@@ -230,8 +238,40 @@ async def _process_subscriber(
     )
     rendered = _render_message(next_rule.message, urls)
 
-    sent = await _send_via_manychat(org, subscriber, rendered)
-    if not sent:
+    if dry_run:
+        if not org.manychat_api_key:
+            result.errors += 1
+            return
+        try:
+            decrypt_value(org.manychat_api_key)
+        except Exception:
+            logger.warning("Failed to decrypt manychat_api_key for org=%s", org.id)
+            result.errors += 1
+            return
+        flow_ns = _follow_up_flow_ns(org, subscriber)
+        if not flow_ns:
+            logger.warning(
+                "[FOLLOWUP] No flow_ns configured for channel=%s org=%s",
+                subscriber.channel,
+                org.id,
+            )
+            result.skipped_no_outbound_flow += 1
+            return
+        result.nudges_sent += 1
+        logger.info(
+            "[FOLLOWUP] dry_run org=%s sub=%s campaign=%s touch=%d would_send",
+            org.id,
+            subscriber.manychat_subscriber_id,
+            subscriber.attora_campaign_id,
+            next_rule.step_order,
+        )
+        return
+
+    outcome = await _send_via_manychat(org, subscriber, rendered)
+    if outcome == "no_flow_ns":
+        result.skipped_no_outbound_flow += 1
+        return
+    if outcome == "failed":
         result.errors += 1
         return
 
@@ -257,12 +297,15 @@ async def _process_subscriber(
     )
 
 
-async def dispatch_follow_ups(db: AsyncSession) -> dict:
+async def dispatch_follow_ups(db: AsyncSession, *, dry_run: bool = False) -> dict:
     """
     Top-level entry point — scans all orgs with follow-ups configured and
     fires due nudges. Caller (cron endpoint) is responsible for db.commit().
+
+    When ``dry_run`` is True, performs eligibility and counts only: no ManyChat
+    calls and no Message rows or conversation/subscriber updates from this path.
     """
-    result = FollowUpResult()
+    result = FollowUpResult(dry_run=dry_run)
     now = datetime.now(timezone.utc)
 
     orgs_q = await db.execute(
@@ -301,7 +344,9 @@ async def dispatch_follow_ups(db: AsyncSession) -> dict:
 
             for subscriber in subscribers:
                 try:
-                    await _process_subscriber(db, org, subscriber, rules, now, result)
+                    await _process_subscriber(
+                        db, org, subscriber, rules, now, result, dry_run=dry_run
+                    )
                 except Exception:
                     logger.exception(
                         "[FOLLOWUP] Unhandled error processing sub=%s", subscriber.id

@@ -482,6 +482,7 @@ export interface DashboardResponse {
   cpqc_trend: DailyTrend[];
   ccr: number;
   ccr_trend: DailyTrend[];
+  avg_steps_per_conversation: number | null;
   active_conversations_count: number;
   todays_conversions: number;
   todays_revenue: number;

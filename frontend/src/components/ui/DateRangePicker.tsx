@@ -29,11 +29,12 @@ export default function DateRangePicker({
   className = '',
 }: DateRangePickerProps) {
   return (
-    <div className={`flex items-center gap-2 ${className}`}>
+    <div className={`flex flex-wrap items-center gap-2 ${className}`}>
       <div className="flex items-center gap-1 rounded-lg border border-gray-300 bg-white px-1 py-1">
         {presets.map((preset) => (
           <button
             key={preset.label}
+            type="button"
             onClick={() => onChange(daysAgo(preset.days), today())}
             className={`rounded-md px-2.5 py-1 text-xs font-medium transition-colors ${
               dateFrom === daysAgo(preset.days) && dateTo === today()

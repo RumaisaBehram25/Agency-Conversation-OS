@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import Badge, { buyerStageBadgeColor, channelBadgeColor } from '../ui/Badge';
-import { formatDate } from '../../utils/formatters';
+import { formatTime } from '../../utils/formatTime';
 import { deleteSubscriber } from '../../api/subscribers';
 import type { SubscriberListItem } from '../../types';
 
@@ -96,10 +96,7 @@ export default function LeadList({ leads, onDeleted }: LeadListProps) {
               Channel
             </th>
             <th className="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
-              First Contact
-            </th>
-            <th className="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
-              Last Contact
+              Last Message
             </th>
             <th className="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
               Buyer Stage
@@ -143,10 +140,7 @@ export default function LeadList({ leads, onDeleted }: LeadListProps) {
                 </Badge>
               </td>
               <td className="whitespace-nowrap px-6 py-4 text-sm text-gray-500">
-                {lead.first_message_at ? formatDate(lead.first_message_at) : '—'}
-              </td>
-              <td className="whitespace-nowrap px-6 py-4 text-sm text-gray-500">
-                {lead.last_message_at ? formatDate(lead.last_message_at) : '—'}
+                {formatTime(lead.last_message_at ?? lead.created_at)}
               </td>
               <td className="whitespace-nowrap px-6 py-4">
                 <Badge color={buyerStageBadgeColor(lead.buyer_stage)}>

@@ -109,6 +109,17 @@ export function formatNumber(value: number): string {
 }
 
 /**
+ * Average “steps” (messages) per conversation (all-time mean); em dash when unknown.
+ */
+export function formatAvgStepsPerConversation(value: number | null): string {
+  if (value == null) return '—';
+  return new Intl.NumberFormat('en-US', {
+    minimumFractionDigits: 1,
+    maximumFractionDigits: 2,
+  }).format(value);
+}
+
+/**
  * Get today's date as YYYY-MM-DD.
  */
 export function todayISO(): string {

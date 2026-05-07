@@ -1,7 +1,8 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import Badge, { buyerStageBadgeColor, statusBadgeColor, channelBadgeColor } from '../ui/Badge';
-import { formatRelativeTime, truncate } from '../../utils/formatters';
+import { truncate } from '../../utils/formatters';
+import { formatTime } from '../../utils/formatTime';
 import { deleteConversation } from '../../api/conversations';
 import type { ConversationListItem } from '../../types';
 
@@ -99,7 +100,7 @@ export default function ConversationList({ conversations, onDeleted }: Conversat
                 </p>
               </td>
               <td className="whitespace-nowrap px-6 py-4 text-sm text-gray-500">
-                {formatRelativeTime(conv.last_message_at || conv.created_at)}
+                {formatTime(conv.last_message_at || conv.created_at)}
               </td>
               <td className="whitespace-nowrap px-6 py-4">
                 <Badge color={buyerStageBadgeColor(conv.buyer_stage)}>

@@ -3,7 +3,7 @@ import { getDashboard } from '../api/dashboard';
 import MetricCard from '../components/dashboard/MetricCard';
 import CampaignHealth from '../components/dashboard/CampaignHealth';
 import LoadingSpinner from '../components/ui/LoadingSpinner';
-import { formatCurrency, formatPercent, formatNumber } from '../utils/formatters';
+import { formatCurrency, formatPercent, formatNumber, formatAvgStepsPerConversation } from '../utils/formatters';
 
 function getCPQCColor(cpqc: number): 'green' | 'yellow' | 'red' {
   if (cpqc <= 5) return 'green';
@@ -77,7 +77,18 @@ export default function DashboardPage() {
       </div>
 
       {/* Secondary metrics */}
-      <div className="mb-6 grid grid-cols-1 gap-6 sm:grid-cols-3">
+      <div className="mb-6 grid grid-cols-1 gap-6 sm:grid-cols-2 xl:grid-cols-4">
+        <MetricCard
+          title="Avg steps per conversation"
+          value={formatAvgStepsPerConversation(data.avg_steps_per_conversation)}
+          subtitle="Mean messages; all time"
+          trendColor="blue"
+          icon={
+            <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" strokeWidth="1.5" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 6A2.25 2.25 0 016 3.75h2.25A2.25 2.25 0 0110.5 6v2.25a2.25 2.25 0 01-2.25 2.25H6a2.25 2.25 0 01-2.25-2.25V6zM3.75 15.75A2.25 2.25 0 016 13.5h2.25a2.25 2.25 0 012.25 2.25V18a2.25 2.25 0 01-2.25 2.25H6A2.25 2.25 0 013.75 18v-2.25zM13.5 6a2.25 2.25 0 012.25-2.25H18A2.25 2.25 0 0120.25 6v2.25A2.25 2.25 0 0118 10.5h-2.25a2.25 2.25 0 01-2.25-2.25V6zM13.5 15.75a2.25 2.25 0 012.25-2.25H18a2.25 2.25 0 012.25 2.25V18A2.25 2.25 0 0118 20.25h-2.25A2.25 2.25 0 0113.5 18v-2.25z" />
+            </svg>
+          }
+        />
         <MetricCard
           title="Active Conversations"
           value={formatNumber(data.active_conversations_count)}

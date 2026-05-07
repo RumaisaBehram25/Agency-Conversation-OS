@@ -129,9 +129,8 @@ async def _send_via_manychat(
     subscriber: Subscriber,
     message: str,
 ) -> bool:
-    """Set the outbound custom field on the subscriber, then trigger the
-    org's open flow. Returns True on apparent success."""
-    if not org.manychat_api_key or not org.manychat_outbound_flow_ns:
+    """Send follow-up text via ManyChat ``/sending/sendContent``. Returns True on success."""
+    if not org.manychat_api_key:
         return False
     try:
         api_key = decrypt_value(org.manychat_api_key)
@@ -146,33 +145,17 @@ async def _send_via_manychat(
     adapter = ManyChatAdapter(api_key=api_key)
     mc_sub = subscriber.manychat_subscriber_id
     try:
-        await adapter.set_custom_fields(
+        await adapter.send_message(
             subscriber_id=mc_sub,
-            fields={"attora_outbound_message": message},
+            text=message,
         )
     except Exception:
         logger.exception(
-            "[FOLLOWUP] ManyChat set_custom_fields failed org_id=%s subscriber_id=%s "
+            "[FOLLOWUP] ManyChat send_message failed org_id=%s subscriber_id=%s "
             "manychat_subscriber_id=%s",
             org.id,
             subscriber.id,
             mc_sub,
-        )
-        return False
-
-    try:
-        await adapter.trigger_flow(
-            subscriber_id=mc_sub,
-            flow_ns=org.manychat_outbound_flow_ns,
-        )
-    except Exception:
-        logger.exception(
-            "[FOLLOWUP] ManyChat trigger_flow failed org_id=%s subscriber_id=%s "
-            "manychat_subscriber_id=%s flow_ns=%s",
-            org.id,
-            subscriber.id,
-            mc_sub,
-            org.manychat_outbound_flow_ns,
         )
         return False
 
@@ -362,7 +345,6 @@ async def dispatch_follow_ups(db: AsyncSession, *, dry_run: bool = False) -> dic
     orgs_q = await db.execute(
         select(Organization).where(
             Organization.manychat_api_key.isnot(None),
-            Organization.manychat_outbound_flow_ns.isnot(None),
         )
     )
     orgs = orgs_q.scalars().all()

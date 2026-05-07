@@ -145,10 +145,16 @@ async def _send_via_manychat(
     adapter = ManyChatAdapter(api_key=api_key)
     mc_sub = subscriber.manychat_subscriber_id
     try:
-        await adapter.send_message(
-            subscriber_id=mc_sub,
-            text=message,
-        )
+        if subscriber.channel == "instagram":
+            await adapter.send_instagram_message(
+                subscriber_id=mc_sub,
+                text=message,
+            )
+        else:
+            await adapter.send_message(
+                subscriber_id=mc_sub,
+                text=message,
+            )
     except Exception:
         logger.exception(
             "[FOLLOWUP] ManyChat send_message failed org_id=%s subscriber_id=%s "

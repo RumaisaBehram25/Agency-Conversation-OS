@@ -61,6 +61,15 @@ def _parse_keywords(keywords: str | None) -> list[str]:
     return [part.strip() for part in keywords.split(",") if part.strip()]
 
 
+def _conversation_last_message_ts():
+    """Latest ``Message.created_at`` for each conversation (correlated subquery)."""
+    return (
+        select(func.max(Message.created_at))
+        .where(Message.conversation_id == Conversation.id)
+        .scalar_subquery()
+    )
+
+
 def _apply_conversation_filters(
     query,
     *,
@@ -75,7 +84,8 @@ def _apply_conversation_filters(
     campaign_id: str | None,
     attora_campaign_id: uuid.UUID | None,
 ):
-    activity_ts = func.coalesce(Conversation.last_activity_at, Conversation.created_at)
+    # Date range = calendar bounds on latest inbound/outbound message time, not started_at.
+    activity_ts = func.coalesce(_conversation_last_message_ts(), Conversation.created_at)
     needs_subscriber_join = (
         is_test is not None
         or source_type is not None
@@ -155,12 +165,18 @@ async def list_conversations(
     date_from: Annotated[
         date | None,
         BeforeValidator(_parse_query_date),
-        Query(description="Inclusive start (UTC). ISO: YYYY-MM-DD, or M/D/YYYY."),
+        Query(
+            description="Inclusive start (UTC) by latest message in thread. "
+            "ISO: YYYY-MM-DD, or M/D/YYYY.",
+        ),
     ] = None,
     date_to: Annotated[
         date | None,
         BeforeValidator(_parse_query_date),
-        Query(description="Inclusive end (UTC). ISO: YYYY-MM-DD, or M/D/YYYY."),
+        Query(
+            description="Inclusive end (UTC) by latest message in thread. "
+            "ISO: YYYY-MM-DD, or M/D/YYYY.",
+        ),
     ] = None,
     is_test: bool | None = Query(None, description="True=playground (attora_test* subscribers), False=real clients only, None=all"),
     source_type: str | None = Query(None, pattern="^(paid|organic)$"),
@@ -172,6 +188,9 @@ async def list_conversations(
 ) -> PaginatedResponse[ConversationListItem]:
     """
     List conversations with filtering and pagination.
+
+    ``date_from`` / ``date_to`` bound the latest message time for each conversation
+    (max ``messages.created_at``), falling back to conversation ``created_at`` when empty.
 
     Includes subscriber name, last message preview, buyer stage, and message count.
     """
@@ -217,21 +236,24 @@ async def list_conversations(
     total_result = await db.execute(count_query)
     total = total_result.scalar() or 0
 
-    # Apply pagination and ordering
+    # Apply pagination and ordering (most recently messaged threads first)
     offset = (page - 1) * page_size
-    query = query.order_by(Conversation.last_activity_at.desc().nullslast()).offset(offset).limit(page_size)
+    sort_ts = func.coalesce(_conversation_last_message_ts(), Conversation.created_at)
+    query = query.order_by(sort_ts.desc().nullslast()).offset(offset).limit(page_size)
 
     result = await db.execute(query)
     conversations = result.scalars().all()
 
-    # Fetch last message previews for all conversations in one query (avoid N+1).
-    last_message_by_conversation_id: dict[uuid.UUID, str] = {}
+    # Latest message preview + created_at per conversation (avoid N+1).
+    last_message_content_by_conv_id: dict[uuid.UUID, str] = {}
+    last_message_at_by_conv_id: dict[uuid.UUID, datetime] = {}
     if conversations:
         conversation_ids = [conv.id for conv in conversations]
         latest_message_subquery = (
             select(
                 Message.conversation_id.label("conversation_id"),
                 Message.content.label("content"),
+                Message.created_at.label("created_at"),
                 func.row_number().over(
                     partition_by=Message.conversation_id,
                     order_by=Message.created_at.desc(),
@@ -245,19 +267,26 @@ async def list_conversations(
             select(
                 latest_message_subquery.c.conversation_id,
                 latest_message_subquery.c.content,
+                latest_message_subquery.c.created_at,
             ).where(latest_message_subquery.c.rn == 1)
         )
-        last_message_by_conversation_id = {
-            row.conversation_id: row.content
-            for row in latest_messages_result
-            if row.content is not None
-        }
+        for row in latest_messages_result:
+            cid = getattr(row, "conversation_id", None)
+            if cid is None:
+                continue
+            content = getattr(row, "content", None)
+            if content is not None:
+                last_message_content_by_conv_id[cid] = content
+            ts = getattr(row, "created_at", None)
+            if ts is not None:
+                last_message_at_by_conv_id[cid] = ts
 
     # Build response items with last message preview
     items = []
     for conv in conversations:
-        last_message = last_message_by_conversation_id.get(conv.id)
+        last_message = last_message_content_by_conv_id.get(conv.id)
         last_message_preview = last_message[:100] if last_message else None
+        last_message_at = last_message_at_by_conv_id.get(conv.id)
 
         subscriber = conv.subscriber
         subscriber_name = None
@@ -279,6 +308,7 @@ async def list_conversations(
                 buyer_stage=buyer_stage,
                 message_count=conv.message_count,
                 last_message_preview=last_message_preview,
+                last_message_at=last_message_at,
                 started_at=conv.started_at,
                 last_activity_at=conv.last_activity_at,
                 created_at=conv.created_at,

@@ -1,6 +1,7 @@
 import { useNavigate } from 'react-router-dom';
 import Badge, { buyerStageBadgeColor, channelBadgeColor, statusBadgeColor } from '../ui/Badge';
 import { formatDate, formatDateTime } from '../../utils/formatters';
+import { formatTime } from '../../utils/formatTime';
 import type { SubscriberDetail } from '../../types';
 
 interface LeadProfileProps {
@@ -275,10 +276,10 @@ export default function LeadProfile({ lead }: LeadProfileProps) {
                   </div>
                   <div className="text-right">
                     <p className="text-sm text-gray-700">
-                      {conv.started_at ? formatDateTime(conv.started_at) : '—'}
+                      {formatTime(conv.last_activity_at || conv.started_at)}
                     </p>
                     <p className="text-xs text-gray-500">
-                      Last: {conv.last_activity_at ? formatDateTime(conv.last_activity_at) : '—'}
+                      Started {conv.started_at ? formatDateTime(conv.started_at) : '—'}
                     </p>
                   </div>
                 </div>

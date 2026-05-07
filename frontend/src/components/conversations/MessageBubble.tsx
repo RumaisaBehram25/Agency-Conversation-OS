@@ -1,5 +1,5 @@
 import Badge, { buyerStageBadgeColor } from '../ui/Badge';
-import { formatTime } from '../../utils/formatters';
+import { formatTime } from '../../utils/formatTime';
 import type { ConversationMessage } from '../../types';
 
 interface MessageBubbleProps {

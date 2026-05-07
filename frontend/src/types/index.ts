@@ -91,7 +91,9 @@ export interface ConversationListItem {
   status: string;
   buyer_stage: string;
   last_message_preview: string;
-  last_message_at: string;
+  /** Latest message time from API; falls back to last_activity_at / created_at in UI */
+  last_message_at: string | null;
+  last_activity_at?: string | null;
   message_count: number;
   subscriber_first_name?: string | null;
   subscriber_last_name?: string | null;

@@ -6,7 +6,7 @@ import logging
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.hyros_sync_log import HyrosSyncLog
@@ -39,6 +39,23 @@ def _sale_stable_id(sale: HyrosSale) -> str:
     )
 
 
+async def _prune_hyros_sync_logs_keep_latest(
+    db: AsyncSession,
+    org_id: uuid.UUID,
+    *,
+    keep: int = 2,
+) -> None:
+    """Delete older HyrosSyncLog rows for this org; retain the ``keep`` newest by synced_at."""
+    await db.flush()
+    old_ids = (
+        select(HyrosSyncLog.id)
+        .where(HyrosSyncLog.org_id == org_id)
+        .order_by(HyrosSyncLog.synced_at.desc())
+        .offset(keep)
+    )
+    await db.execute(delete(HyrosSyncLog).where(HyrosSyncLog.id.in_(old_ids)))
+
+
 async def _persist_hyros_sync_log(
     db: AsyncSession,
     *,
@@ -64,6 +81,7 @@ async def _persist_hyros_sync_log(
             matched_by_email=matched_by_email,
         )
     )
+    await _prune_hyros_sync_logs_keep_latest(db, org_id, keep=2)
 
 
 def _resolve_org_hyros_api_key(org: Organization) -> tuple[str | None, str | None]:

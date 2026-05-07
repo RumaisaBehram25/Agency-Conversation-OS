@@ -106,7 +106,7 @@ export async function getHyrosSourceBreakdown(filters: {
   return response.data;
 }
 
-export async function getHyrosSyncHealth(limit = 10): Promise<HyrosSyncHealthResponse> {
+export async function getHyrosSyncHealth(limit = 2): Promise<HyrosSyncHealthResponse> {
   const params = new URLSearchParams({ limit: String(limit) });
   const response = await client.get<HyrosSyncHealthResponse>(
     `/analytics/hyros-sync-health?${params.toString()}`

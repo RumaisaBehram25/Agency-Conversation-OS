@@ -196,6 +196,7 @@ export default function ConversationsPage() {
         />
         <div>
           <label className="block text-sm font-medium text-gray-700 mb-1">Date Range</label>
+          <p className="mb-1 text-xs text-gray-500">Filters by latest message in each thread</p>
           <DateRangePicker
             dateFrom={filters.date_from || ''}
             dateTo={filters.date_to || ''}

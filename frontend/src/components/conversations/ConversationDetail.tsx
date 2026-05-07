@@ -1,7 +1,7 @@
 import { useEffect, useRef } from 'react';
 import Badge, { buyerStageBadgeColor, statusBadgeColor, channelBadgeColor } from '../ui/Badge';
 import MessageBubble from './MessageBubble';
-import { formatDateTime } from '../../utils/formatters';
+import { formatTime } from '../../utils/formatTime';
 import type { ConversationDetail as ConversationDetailType } from '../../types';
 
 interface ConversationDetailProps {
@@ -125,13 +125,13 @@ export default function ConversationDetailView({ conversation }: ConversationDet
             <div>
               <dt className="text-xs text-gray-500">Started</dt>
               <dd className="text-sm text-gray-700">
-                {formatDateTime(conversation.created_at)}
+                {formatTime(conversation.created_at)}
               </dd>
             </div>
             <div>
               <dt className="text-xs text-gray-500">Last Updated</dt>
               <dd className="text-sm text-gray-700">
-                {formatDateTime(conversation.updated_at)}
+                {formatTime(conversation.updated_at)}
               </dd>
             </div>
             <div>

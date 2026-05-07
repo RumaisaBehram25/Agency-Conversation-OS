@@ -7,7 +7,7 @@ Request/response models for conversation list and detail endpoints.
 from datetime import datetime
 from uuid import UUID
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class MessageResponse(BaseModel):
@@ -53,6 +53,10 @@ class ConversationListItem(BaseModel):
     buyer_stage: str | None = None
     message_count: int
     last_message_preview: str | None = None
+    last_message_at: datetime | None = Field(
+        default=None,
+        description="Latest message created_at for this conversation.",
+    )
     started_at: datetime | None = None
     last_activity_at: datetime | None = None
     created_at: datetime

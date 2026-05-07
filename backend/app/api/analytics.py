@@ -173,7 +173,7 @@ async def analytics_hyros_sync_health(
     current_user: User = Depends(get_current_user),
     org_id: uuid.UUID = Depends(get_org_id),
     db: AsyncSession = Depends(get_db),
-    limit: int = Query(10, ge=1, le=50, description="Recent sync rows to return"),
+    limit: int = Query(2, ge=1, le=50, description="Recent sync rows to return"),
 ) -> HyrosSyncHealthResponse:
     """
     Recent Hyros sync runs for the current user's org (JWT org scope).

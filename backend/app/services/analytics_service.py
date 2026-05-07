@@ -1589,9 +1589,9 @@ async def get_hyros_sync_health(
     db: AsyncSession,
     org_id: uuid.UUID,
     *,
-    last_n: int = 10,
+    last_n: int = 2,
 ) -> HyrosSyncHealthResponse:
-    """Last N Hyros sync audit rows for an org with purchase match rate per run."""
+    """Recent Hyros sync audit rows for an org with purchase match rate per run."""
     last_n = max(1, min(int(last_n), 50))
     result = await db.execute(
         select(HyrosSyncLog)

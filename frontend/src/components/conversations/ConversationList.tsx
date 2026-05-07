@@ -100,7 +100,9 @@ export default function ConversationList({ conversations, onDeleted }: Conversat
                 </p>
               </td>
               <td className="whitespace-nowrap px-6 py-4 text-sm text-gray-500">
-                {formatTime(conv.last_message_at || conv.created_at)}
+                {formatTime(
+                  conv.last_message_at || conv.last_activity_at || conv.created_at
+                )}
               </td>
               <td className="whitespace-nowrap px-6 py-4">
                 <Badge color={buyerStageBadgeColor(conv.buyer_stage)}>

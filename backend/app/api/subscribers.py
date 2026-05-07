@@ -10,6 +10,9 @@ from datetime import date, datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy import func, select
+
+from app.models.conversation import Conversation
+from app.models.message import Message
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -35,8 +38,14 @@ async def list_subscribers(
     db: AsyncSession = Depends(get_db),
     buyer_stage: str | None = Query(None),
     channel: str | None = Query(None),
-    date_from: date | None = Query(None),
-    date_to: date | None = Query(None),
+    date_from: date | None = Query(
+        None,
+        description="Inclusive start (UTC): latest message across lead's conversations.",
+    ),
+    date_to: date | None = Query(
+        None,
+        description="Inclusive end (UTC): latest message across lead's conversations.",
+    ),
     is_converted: bool | None = Query(None),
     hyros_status: str | None = Query(None),
     is_test: bool | None = Query(None, description="True=playground (attora_test* subscribers), False=real clients only, None=all"),
@@ -45,6 +54,10 @@ async def list_subscribers(
 ) -> PaginatedResponse[SubscriberListItem]:
     """
     List subscribers/leads with filtering and pagination.
+
+    ``date_from`` / ``date_to`` filter by latest message time across all of the
+    subscriber's conversations (max ``messages.created_at``), falling back to
+    ``subscriber.created_at`` when they have no messages.
     """
     # Base query
     query = select(Subscriber).where(Subscriber.org_id == org_id)
@@ -77,7 +90,14 @@ async def list_subscribers(
         query = query.where(Subscriber.channel == channel_type)
         count_query = count_query.where(Subscriber.channel == channel_type)
 
-    subscriber_activity_ts = func.coalesce(Subscriber.last_message_at, Subscriber.created_at)
+    subscriber_last_msg_ts = (
+        select(func.max(Message.created_at))
+        .select_from(Message)
+        .join(Conversation, Message.conversation_id == Conversation.id)
+        .where(Conversation.subscriber_id == Subscriber.id)
+        .scalar_subquery()
+    )
+    subscriber_activity_ts = func.coalesce(subscriber_last_msg_ts, Subscriber.created_at)
 
     if date_from:
         dt_from = datetime(date_from.year, date_from.month, date_from.day, tzinfo=timezone.utc)

@@ -499,6 +499,7 @@ def test_conversation_contracts(client):
     latest_preview_row = SimpleNamespace(
         conversation_id=conversation.id,
         content="Latest message preview",
+        created_at=conversation.last_activity_at,
     )
     fake_db = QueueSession([
         FakeResult(scalar=1),

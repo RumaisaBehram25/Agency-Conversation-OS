@@ -1,7 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import Button from '../ui/Button';
 import Input from '../ui/Input';
-import Pagination from '../ui/Pagination';
 import type { HyrosSyncHealthResponse, SettingsResponse, SettingsUpdate } from '../../types';
 import { getHyrosSyncHealth } from '../../api/analytics';
 
@@ -9,9 +8,6 @@ interface SettingsFormProps {
   settings: SettingsResponse;
   onSave: (data: SettingsUpdate) => Promise<void>;
 }
-
-/** Rows per page in Hyros sync visibility table */
-const HYROS_SYNC_RUNS_PAGE_SIZE = 3;
 
 function isMasked(value: string | null | undefined): boolean {
   const safeValue = value || '';
@@ -37,13 +33,12 @@ export default function SettingsForm({ settings, onSave }: SettingsFormProps) {
   const [error, setError] = useState('');
   const [hyrosHealth, setHyrosHealth] = useState<HyrosSyncHealthResponse | null>(null);
   const [hyrosHealthLoading, setHyrosHealthLoading] = useState(false);
-  const [hyrosSyncRunsPage, setHyrosSyncRunsPage] = useState(1);
 
   const refreshHyrosHealth = useCallback(async () => {
     if (!settings.hyros_api_key) return;
     setHyrosHealthLoading(true);
     try {
-      const h = await getHyrosSyncHealth(50);
+      const h = await getHyrosSyncHealth(2);
       setHyrosHealth(h);
     } catch {
       setHyrosHealth(null);
@@ -51,15 +46,6 @@ export default function SettingsForm({ settings, onSave }: SettingsFormProps) {
       setHyrosHealthLoading(false);
     }
   }, [settings.hyros_api_key]);
-
-  useEffect(() => {
-    if (!hyrosHealth?.sync_runs.length) return;
-    const totalPages = Math.max(
-      1,
-      Math.ceil(hyrosHealth.sync_runs.length / HYROS_SYNC_RUNS_PAGE_SIZE)
-    );
-    setHyrosSyncRunsPage((p) => Math.min(p, totalPages));
-  }, [hyrosHealth?.sync_runs]);
 
   useEffect(() => {
     void refreshHyrosHealth();
@@ -288,14 +274,9 @@ export default function SettingsForm({ settings, onSave }: SettingsFormProps) {
                           </tr>
                         </thead>
                         <tbody>
-                          {hyrosHealth.sync_runs
-                            .slice(
-                              (hyrosSyncRunsPage - 1) * HYROS_SYNC_RUNS_PAGE_SIZE,
-                              hyrosSyncRunsPage * HYROS_SYNC_RUNS_PAGE_SIZE
-                            )
-                            .map((run, idx) => (
+                          {hyrosHealth.sync_runs.map((run, idx) => (
                               <tr
-                                key={`${run.synced_at}-${(hyrosSyncRunsPage - 1) * HYROS_SYNC_RUNS_PAGE_SIZE + idx}`}
+                                key={`${run.synced_at}-${idx}`}
                                 className="border-b border-emerald-50 last:border-0"
                               >
                                 <td className="px-2 py-1.5 whitespace-nowrap tabular-nums">
@@ -329,12 +310,6 @@ export default function SettingsForm({ settings, onSave }: SettingsFormProps) {
                         </tbody>
                       </table>
                     </div>
-                    <Pagination
-                      page={hyrosSyncRunsPage}
-                      pageSize={HYROS_SYNC_RUNS_PAGE_SIZE}
-                      total={hyrosHealth.sync_runs.length}
-                      onPageChange={setHyrosSyncRunsPage}
-                    />
                   </div>
                 )}
               </>

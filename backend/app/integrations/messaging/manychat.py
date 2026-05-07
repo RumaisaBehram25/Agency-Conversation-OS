@@ -151,8 +151,10 @@ class ManyChatAdapter(MessagingAdapter):
 
         except httpx.HTTPStatusError as e:
             logger.error(
-                f"ManyChat API error: POST {endpoint} -> {e.response.status_code}: "
-                f"{e.response.text[:500]}"
+                "ManyChat API error: POST %s -> %s: %s",
+                endpoint,
+                e.response.status_code,
+                e.response.text,
             )
             raise
 
@@ -180,8 +182,10 @@ class ManyChatAdapter(MessagingAdapter):
 
         except httpx.HTTPStatusError as e:
             logger.error(
-                f"ManyChat Instagram API error: POST {endpoint} -> {e.response.status_code}: "
-                f"{e.response.text[:500]}"
+                "ManyChat Instagram API error: POST %s -> %s: %s",
+                endpoint,
+                e.response.status_code,
+                e.response.text,
             )
             raise
 

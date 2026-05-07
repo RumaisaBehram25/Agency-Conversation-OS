@@ -157,11 +157,11 @@ async def _send_via_manychat(
             )
     except Exception:
         logger.exception(
-            "[FOLLOWUP] ManyChat send_message failed org_id=%s subscriber_id=%s "
-            "manychat_subscriber_id=%s",
+            "[FOLLOWUP] ManyChat send failed org=%s sub=%s channel=%s mc_id=%s",
             org.id,
             subscriber.id,
-            mc_sub,
+            subscriber.channel,
+            subscriber.manychat_subscriber_id,
         )
         return False
 

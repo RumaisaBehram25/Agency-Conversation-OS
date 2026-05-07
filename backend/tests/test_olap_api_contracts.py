@@ -59,6 +59,7 @@ def test_olap_dashboard_contract(client, monkeypatch):
             "cpqc_trend": [{"date": date(2026, 4, 1), "value": 10.0}],
             "ccr": 0.24,
             "ccr_trend": [{"date": date(2026, 4, 1), "value": 0.2}],
+            "avg_steps_per_conversation": 4.25,
             "active_conversations_count": 4,
             "todays_conversions": 2,
             "todays_revenue": 199.0,
@@ -71,8 +72,8 @@ def test_olap_dashboard_contract(client, monkeypatch):
     assert response.status_code == 200
     payload = response.json()
     assert set(payload.keys()) == {
-        "cpqc", "cpqc_trend", "ccr", "ccr_trend", "active_conversations_count",
-        "todays_conversions", "todays_revenue", "campaign_health",
+        "cpqc", "cpqc_trend", "ccr", "ccr_trend", "avg_steps_per_conversation",
+        "active_conversations_count", "todays_conversions", "todays_revenue", "campaign_health",
     }
 
 

@@ -26,6 +26,8 @@ class DashboardOverviewResponse(BaseModel):
     ccr: float | None = None
     ccr_trend: list[DailyTrend] = []
 
+    avg_steps_per_conversation: float | None = None
+
     active_conversations_count: int = 0
     todays_conversions: int = 0
     todays_revenue: float = 0.0

@@ -309,8 +309,18 @@ async def get_olap_dashboard_overview(org_id: uuid.UUID) -> dict[str, Any]:
         GROUP BY channel
         ORDER BY channel
     """
+    avg_steps_query = f"""
+        SELECT
+            CAST(SUM(CAST(total_messages AS BIGINT)) AS DOUBLE)
+                / CAST(NULLIF(SUM(CAST(active_conversations AS BIGINT)), 0) AS DOUBLE)
+                AS avg_steps_per_conversation
+        FROM {_DAILY_ANALYTICS_TABLE}
+        WHERE {_daily_analytics_where(org_id, date(1970, 1, 1), today, combined_only=True)}
+    """
 
-    today_result, health_result = await _execute_queries(today_query, health_query)
+    today_result, health_result, avg_steps_result = await _execute_queries(
+        today_query, health_query, avg_steps_query
+    )
     today_row = _first_row(today_result)
     health_rows = health_result.rows
 
@@ -338,11 +348,18 @@ async def get_olap_dashboard_overview(org_id: uuid.UUID) -> dict[str, Any]:
                 reason = f"CPA ${cpa:.2f} — needs attention"
         campaign_health.append(CampaignHealth(name=channel_name, status=status, reason=reason))
 
+    avg_steps_row = _first_row(avg_steps_result)
+    avg_steps_val = _optional_float_value(avg_steps_row, "avg_steps_per_conversation")
+    avg_steps_per_conversation = (
+        round(avg_steps_val, 2) if avg_steps_val is not None else None
+    )
+
     return {
         "cpqc": analytics.cpqc,
         "cpqc_trend": analytics.cpqc_trend,
         "ccr": analytics.ccr,
         "ccr_trend": analytics.ccr_trend,
+        "avg_steps_per_conversation": avg_steps_per_conversation,
         "active_conversations_count": _int_value(today_row, "active_conversations_count"),
         "todays_conversions": _int_value(today_row, "todays_conversions"),
         "todays_revenue": _float_value(today_row, "todays_revenue"),

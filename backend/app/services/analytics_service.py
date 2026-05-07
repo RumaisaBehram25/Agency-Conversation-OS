@@ -1293,6 +1293,16 @@ async def get_dashboard_overview(
     )
     active_conversations_count = active_result.scalar() or 0
 
+    avg_steps_result = await db.execute(
+        select(func.avg(Conversation.message_count)).where(Conversation.org_id == org_id)
+    )
+    raw_avg_steps = avg_steps_result.scalar()
+    avg_steps_per_conversation = (
+        round(float(raw_avg_steps), 2)
+        if raw_avg_steps is not None
+        else None
+    )
+
     # Today's conversions and revenue
     today_start = datetime(today.year, today.month, today.day, tzinfo=timezone.utc)
     today_end = datetime(today.year, today.month, today.day, 23, 59, 59, tzinfo=timezone.utc)
@@ -1321,6 +1331,7 @@ async def get_dashboard_overview(
         "cpqc_trend": analytics.cpqc_trend,
         "ccr": analytics.ccr,
         "ccr_trend": analytics.ccr_trend,
+        "avg_steps_per_conversation": avg_steps_per_conversation,
         "active_conversations_count": active_conversations_count,
         "todays_conversions": todays_conversions,
         "todays_revenue": todays_revenue,

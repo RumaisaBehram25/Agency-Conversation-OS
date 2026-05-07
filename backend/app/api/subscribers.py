@@ -77,15 +77,17 @@ async def list_subscribers(
         query = query.where(Subscriber.channel == channel_type)
         count_query = count_query.where(Subscriber.channel == channel_type)
 
+    subscriber_activity_ts = func.coalesce(Subscriber.last_message_at, Subscriber.created_at)
+
     if date_from:
         dt_from = datetime(date_from.year, date_from.month, date_from.day, tzinfo=timezone.utc)
-        query = query.where(Subscriber.created_at >= dt_from)
-        count_query = count_query.where(Subscriber.created_at >= dt_from)
+        query = query.where(subscriber_activity_ts >= dt_from)
+        count_query = count_query.where(subscriber_activity_ts >= dt_from)
 
     if date_to:
         dt_to = datetime(date_to.year, date_to.month, date_to.day, 23, 59, 59, tzinfo=timezone.utc)
-        query = query.where(Subscriber.created_at <= dt_to)
-        count_query = count_query.where(Subscriber.created_at <= dt_to)
+        query = query.where(subscriber_activity_ts <= dt_to)
+        count_query = count_query.where(subscriber_activity_ts <= dt_to)
 
     if is_converted is not None:
         query = query.where(Subscriber.is_converted == is_converted)

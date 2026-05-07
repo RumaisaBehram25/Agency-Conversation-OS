@@ -30,6 +30,7 @@ async def dashboard_overview(
     Returns:
     - CPQC with 7-day trend
     - CCR with 7-day trend
+    - Average messages per conversation (steps), all-time
     - Active conversations count
     - Today's conversions and revenue
     - Campaign health array (green/yellow/red per channel)

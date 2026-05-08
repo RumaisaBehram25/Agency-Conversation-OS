@@ -210,6 +210,14 @@ async def manychat_webhook(
     if request.subscriber.email:
         custom_fields["email"] = request.subscriber.email
 
+    # post_id precedence: top-level request field wins over custom_fields.
+    # ManyChat flows that pass post_id at the request root don't need to
+    # round-trip through a subscriber custom field first, so prefer that path
+    # when present. Fall back to whatever custom_fields already carries.
+    top_level_post_id = (request.post_id or "").strip() if request.post_id else None
+    if top_level_post_id:
+        custom_fields["post_id"] = top_level_post_id
+
     # Diagnostic: log attora_campaign_id from custom_fields and attempt DB lookup
     try:
         attora_campaign_id = custom_fields.get("attora_campaign_id")

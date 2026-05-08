@@ -84,6 +84,11 @@ class ManyChatWebhookRequest(BaseModel):
     event_type: str | None = Field(None, description="Event type (e.g. 'sent', 'clicked')")
     clicked: bool | None = Field(None, description="True if a button/quick reply was clicked")
     button_clicked: bool | None = Field(None, description="True if a button was clicked")
+    # Top-level post_id (preferred path). ManyChat comment-trigger flows can pass
+    # the IG post id at the request root rather than nesting under custom_fields,
+    # which avoids the round-trip of writing to a subscriber custom field first.
+    # Always optional — falls back to subscriber.custom_fields.post_id when absent.
+    post_id: str | None = Field(None, description="IG/FB post ID that triggered the flow")
 
 
 # ── ManyChat Webhook Response (v2 format) ─────────────────────

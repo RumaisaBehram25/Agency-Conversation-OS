@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import Button from '../ui/Button';
 import Input from '../ui/Input';
 import type { HyrosSyncHealthResponse, SettingsResponse, SettingsUpdate } from '../../types';
@@ -8,6 +8,12 @@ interface SettingsFormProps {
   settings: SettingsResponse;
   onSave: (data: SettingsUpdate) => Promise<void>;
 }
+
+// Hyros sync visibility: show 3 days of runs (scheduler fires every ~3h, so
+// up to 24 entries) and paginate at 3 rows per page so the panel doesn't
+// dominate the Settings layout. Backend prunes >3-day-old rows on each sync.
+const HYROS_HEALTH_FETCH_LIMIT = 30;
+const HYROS_HEALTH_PAGE_SIZE = 3;
 
 function isMasked(value: string | null | undefined): boolean {
   const safeValue = value || '';
@@ -33,13 +39,15 @@ export default function SettingsForm({ settings, onSave }: SettingsFormProps) {
   const [error, setError] = useState('');
   const [hyrosHealth, setHyrosHealth] = useState<HyrosSyncHealthResponse | null>(null);
   const [hyrosHealthLoading, setHyrosHealthLoading] = useState(false);
+  const [hyrosPage, setHyrosPage] = useState(1);
 
   const refreshHyrosHealth = useCallback(async () => {
     if (!settings.hyros_api_key) return;
     setHyrosHealthLoading(true);
     try {
-      const h = await getHyrosSyncHealth(2);
+      const h = await getHyrosSyncHealth(HYROS_HEALTH_FETCH_LIMIT);
       setHyrosHealth(h);
+      setHyrosPage(1);
     } catch {
       setHyrosHealth(null);
     } finally {
@@ -50,6 +58,17 @@ export default function SettingsForm({ settings, onSave }: SettingsFormProps) {
   useEffect(() => {
     void refreshHyrosHealth();
   }, [refreshHyrosHealth]);
+
+  const hyrosTotalPages = useMemo(() => {
+    const total = hyrosHealth?.sync_runs.length ?? 0;
+    return Math.max(1, Math.ceil(total / HYROS_HEALTH_PAGE_SIZE));
+  }, [hyrosHealth]);
+
+  const hyrosPagedRuns = useMemo(() => {
+    if (!hyrosHealth) return [];
+    const start = (hyrosPage - 1) * HYROS_HEALTH_PAGE_SIZE;
+    return hyrosHealth.sync_runs.slice(start, start + HYROS_HEALTH_PAGE_SIZE);
+  }, [hyrosHealth, hyrosPage]);
 
   useEffect(() => {
     setForm({
@@ -258,23 +277,24 @@ export default function SettingsForm({ settings, onSave }: SettingsFormProps) {
                     No sync runs logged yet — wait for the scheduled job.
                   </p>
                 ) : (
-                  <div className="mt-3 overflow-hidden rounded border border-emerald-100/80 bg-white/60">
-                    <div className="overflow-x-auto">
-                      <table className="min-w-full text-xs">
-                        <thead>
-                          <tr className="border-b border-emerald-100 text-left text-emerald-800">
-                            <th className="px-2 py-1.5 font-medium">Synced at</th>
-                            <th className="px-2 py-1.5 font-medium text-right">Match %</th>
-                            <th className="px-2 py-1.5 font-medium text-right">Unmatched</th>
-                            <th className="px-2 py-1.5 font-medium text-right">Sales</th>
-                            <th className="px-2 py-1.5 font-medium text-right">Matched</th>
-                            <th className="px-2 py-1.5 font-medium text-right">attora_id %</th>
-                            <th className="px-2 py-1.5 font-medium text-right">attora_sub</th>
-                            <th className="px-2 py-1.5 font-medium text-right">email</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {hyrosHealth.sync_runs.map((run, idx) => (
+                  <>
+                    <div className="mt-3 overflow-hidden rounded border border-emerald-100/80 bg-white/60">
+                      <div className="overflow-x-auto">
+                        <table className="min-w-full text-xs">
+                          <thead>
+                            <tr className="border-b border-emerald-100 text-left text-emerald-800">
+                              <th className="px-2 py-1.5 font-medium">Synced at</th>
+                              <th className="px-2 py-1.5 font-medium text-right">Match %</th>
+                              <th className="px-2 py-1.5 font-medium text-right">Unmatched</th>
+                              <th className="px-2 py-1.5 font-medium text-right">Sales</th>
+                              <th className="px-2 py-1.5 font-medium text-right">Matched</th>
+                              <th className="px-2 py-1.5 font-medium text-right">attora_id %</th>
+                              <th className="px-2 py-1.5 font-medium text-right">attora_sub</th>
+                              <th className="px-2 py-1.5 font-medium text-right">email</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {hyrosPagedRuns.map((run, idx) => (
                               <tr
                                 key={`${run.synced_at}-${idx}`}
                                 className="border-b border-emerald-50 last:border-0"
@@ -307,10 +327,49 @@ export default function SettingsForm({ settings, onSave }: SettingsFormProps) {
                                 </td>
                               </tr>
                             ))}
-                        </tbody>
-                      </table>
+                          </tbody>
+                        </table>
+                      </div>
                     </div>
-                  </div>
+                    {hyrosHealth.sync_runs.length > HYROS_HEALTH_PAGE_SIZE && (
+                      <div className="mt-2 flex items-center justify-between text-xs text-emerald-800">
+                        <span>
+                          Showing{' '}
+                          <strong className="text-emerald-950">
+                            {(hyrosPage - 1) * HYROS_HEALTH_PAGE_SIZE + 1}
+                            {'–'}
+                            {Math.min(
+                              hyrosPage * HYROS_HEALTH_PAGE_SIZE,
+                              hyrosHealth.sync_runs.length,
+                            )}
+                          </strong>{' '}
+                          of <strong className="text-emerald-950">{hyrosHealth.sync_runs.length}</strong>{' '}
+                          runs (last 3 days, every ~3h)
+                        </span>
+                        <div className="flex items-center gap-1">
+                          <button
+                            type="button"
+                            onClick={() => setHyrosPage((p) => Math.max(1, p - 1))}
+                            disabled={hyrosPage <= 1}
+                            className="rounded border border-emerald-200 bg-white px-2 py-0.5 text-emerald-800 hover:bg-emerald-50 disabled:cursor-not-allowed disabled:opacity-40"
+                          >
+                            Prev
+                          </button>
+                          <span className="px-1 tabular-nums text-emerald-900">
+                            Page {hyrosPage} / {hyrosTotalPages}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => setHyrosPage((p) => Math.min(hyrosTotalPages, p + 1))}
+                            disabled={hyrosPage >= hyrosTotalPages}
+                            className="rounded border border-emerald-200 bg-white px-2 py-0.5 text-emerald-800 hover:bg-emerald-50 disabled:cursor-not-allowed disabled:opacity-40"
+                          >
+                            Next
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                  </>
                 )}
               </>
             ) : null}

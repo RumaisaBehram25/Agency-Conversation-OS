@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -39,21 +39,33 @@ def _sale_stable_id(sale: HyrosSale) -> str:
     )
 
 
-async def _prune_hyros_sync_logs_keep_latest(
+# Sync-log retention window. The Hyros scheduler runs every ~3 hours, so a
+# 3-day window keeps roughly 24 audit rows per org — enough to render a
+# 3-hour-step health table on the Settings page without unbounded growth.
+HYROS_SYNC_LOG_RETENTION_DAYS = 3
+
+
+async def _prune_old_hyros_sync_logs(
     db: AsyncSession,
     org_id: uuid.UUID,
     *,
-    keep: int = 2,
+    retention_days: int = HYROS_SYNC_LOG_RETENTION_DAYS,
 ) -> None:
-    """Delete older HyrosSyncLog rows for this org; retain the ``keep`` newest by synced_at."""
+    """
+    Delete HyrosSyncLog rows older than ``retention_days`` for this org.
+
+    Time-based pruning (instead of count-based) lets the Settings UI render a
+    "last N days, every 3 hours" view directly without truncating recent
+    history when the scheduler runs more often than expected.
+    """
     await db.flush()
-    old_ids = (
-        select(HyrosSyncLog.id)
-        .where(HyrosSyncLog.org_id == org_id)
-        .order_by(HyrosSyncLog.synced_at.desc())
-        .offset(keep)
+    cutoff = datetime.now(timezone.utc) - timedelta(days=max(1, int(retention_days)))
+    await db.execute(
+        delete(HyrosSyncLog).where(
+            HyrosSyncLog.org_id == org_id,
+            HyrosSyncLog.synced_at < cutoff,
+        )
     )
-    await db.execute(delete(HyrosSyncLog).where(HyrosSyncLog.id.in_(old_ids)))
 
 
 async def _persist_hyros_sync_log(
@@ -81,7 +93,7 @@ async def _persist_hyros_sync_log(
             matched_by_email=matched_by_email,
         )
     )
-    await _prune_hyros_sync_logs_keep_latest(db, org_id, keep=2)
+    await _prune_old_hyros_sync_logs(db, org_id)
 
 
 def _resolve_org_hyros_api_key(org: Organization) -> tuple[str | None, str | None]:

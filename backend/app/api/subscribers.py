@@ -141,9 +141,20 @@ async def list_subscribers(
     total_result = await db.execute(count_query)
     total = total_result.scalar() or 0
 
-    # Apply pagination and ordering
+    # Apply pagination and ordering.
+    # Sort by latest message activity (max(message.created_at) coalesced to
+    # subscriber.created_at) so the Leads list mirrors the Conversations list
+    # ordering — recent inbound/outbound traffic floats to the top instead of
+    # ranking purely by when the subscriber row was first created.
     offset = (page - 1) * page_size
-    query = query.order_by(Subscriber.created_at.desc()).offset(offset).limit(page_size)
+    query = (
+        query.order_by(
+            subscriber_activity_ts.desc().nullslast(),
+            Subscriber.created_at.desc(),
+        )
+        .offset(offset)
+        .limit(page_size)
+    )
 
     result = await db.execute(query)
     subscribers = result.scalars().all()

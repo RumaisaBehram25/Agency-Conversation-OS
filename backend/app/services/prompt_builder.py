@@ -235,6 +235,15 @@ def build_system_prompt(
         )
     sections: list[str] = []
 
+    ai = org_config.ai_config
+
+    # Section 0: system_prompt_override — injected first so clinical/escalation
+    # rules are read before the base persona and cannot be buried or ignored.
+    if ai.system_prompt_override:
+        sections.append(
+            f"## CRITICAL INSTRUCTIONS - HIGHEST PRIORITY\n{ai.system_prompt_override}"
+        )
+
     # Section 1: Base Persona
     sections.append(f"## BASE PERSONA\n{_BASE_PERSONA}")
 
@@ -242,7 +251,6 @@ def build_system_prompt(
     sections.append(_SALES_STYLE_AND_PRODUCT_PLAYBOOK)
 
     # Section 2: Client Brand Voice
-    ai = org_config.ai_config
     if ai.brand_voice:
         sections.append(f"## CLIENT BRAND VOICE\n{ai.brand_voice}")
 
@@ -342,12 +350,6 @@ def build_system_prompt(
     if ai.objection_handlers:
         handlers_text = json.dumps(ai.objection_handlers, indent=2)
         sections.append(f"## OBJECTION HANDLERS\n{handlers_text}")
-
-    # Section 7: System Prompt Override (takes highest priority)
-    if ai.system_prompt_override:
-        sections.append(
-            f"## ADDITIONAL INSTRUCTIONS\n{ai.system_prompt_override}"
-        )
 
     # Combine all sections into the system prompt text
     full_system_text = "\n\n".join(sections)

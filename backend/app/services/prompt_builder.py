@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import logging
 
+from app.config import settings
 from app.schemas.ai_engine import ConversationContext, OrgConfig
 from app.utils.dm_links import DmSubscriberView, build_dm_link
 
@@ -319,9 +320,11 @@ def build_system_prompt(
     # for the one campaign this subscriber is attributed to.
     campaign_script = org_config.campaign_scripts.get(attora_campaign_id or "") if attora_campaign_id else None
     if campaign_script:
-        sections.append(f"## CAMPAIGN SCRIPT\n{campaign_script}")
+        resolved_script = campaign_script.replace("[CALL_LINK]", settings.warrior_babe_call_link)
+        sections.append(f"## CAMPAIGN SCRIPT\n{resolved_script}")
     elif ai.conversion_playbook:
-        sections.append(f"## CONVERSION PLAYBOOK\n{ai.conversion_playbook}")
+        resolved_playbook = ai.conversion_playbook.replace("[CALL_LINK]", settings.warrior_babe_call_link)
+        sections.append(f"## CONVERSION PLAYBOOK\n{resolved_playbook}")
 
     # Section 6: Objection Handlers
     if ai.objection_handlers:

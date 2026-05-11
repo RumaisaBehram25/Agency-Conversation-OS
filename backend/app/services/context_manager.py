@@ -250,9 +250,6 @@ async def store_message_and_update_context(
             )
 
             # ── Update conversation ────────────────────────────
-            # The user just sent us a message → reset follow_up_attempts
-            # so a fresh silence cycle starts. The dispatcher will pick
-            # them up again if they go silent past Touch 1's threshold.
             await session.execute(
                 update(Conversation)
                 .where(Conversation.id == conversation_id)
@@ -260,7 +257,6 @@ async def store_message_and_update_context(
                     message_count=Conversation.message_count + 2,
                     last_activity_at=now,
                     ai_response_time_avg_ms=ai_response.response_time_ms,
-                    follow_up_attempts=0,
                 )
             )
 

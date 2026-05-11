@@ -61,6 +61,7 @@ class BuyerStage(str, enum.Enum):
     INTENT = "intent"
     PURCHASE = "purchase"
     POST_PURCHASE = "post_purchase"
+    CONFIRMED = "confirmed"
 
 
 class ConversationStatus(str, enum.Enum):

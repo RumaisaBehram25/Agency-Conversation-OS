@@ -9,13 +9,13 @@ Decision flow per subscriber (all must be true):
      where `silence_anchor = COALESCE(last_user_message_at, conv.started_at)`.
   2. Last message was outbound (we don't nudge an actively-engaged thread).
   3. Hasn't bought — `hyros_purchased = false` AND
-     `buyer_stage NOT IN (purchase, post_purchase)` AND no recorded
+     `buyer_stage NOT IN (purchase, post_purchase, confirmed)` AND no recorded
      ConversionEvent of type=purchase.
   4. Hasn't already received this rule — `conv.follow_up_attempts < len(rules)`.
 
 When the user replies inbound (handled in `services/context_manager.py`),
-`follow_up_attempts` resets to 0 so a returning lead who goes silent
-again gets the full sequence over.
+only `last_user_message_at` (the silence timer) is reset — `follow_up_attempts`
+is NOT reset, so the sequence continues where it left off rather than restarting.
 
 Outbound transport: ManyChat's "open" flow — Attora sets a custom field
 `attora_outbound_message` on the subscriber, then triggers the channel-specific
@@ -94,7 +94,7 @@ def _render_message(template: str, urls: dict[str, str]) -> str:
 def _has_purchased(subscriber: Subscriber) -> bool:
     if subscriber.hyros_purchased:
         return True
-    if subscriber.buyer_stage in (BuyerStage.PURCHASE, BuyerStage.POST_PURCHASE):
+    if subscriber.buyer_stage in (BuyerStage.PURCHASE, BuyerStage.POST_PURCHASE, BuyerStage.CONFIRMED):
         return True
     return False
 

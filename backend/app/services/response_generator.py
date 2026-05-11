@@ -130,16 +130,38 @@ async def _call_sonnet(
     tokens_used = usage.input_tokens + usage.output_tokens
 
     # Parse JSON from response
+    if not response.content:
+        raise ValueError(
+            f"Anthropic returned empty content list "
+            f"(stop_reason={response.stop_reason})"
+        )
     raw_text = response.content[0].text.strip()
     parsed = _parse_response_json(raw_text)
 
+    # Use `or raw_text` so a JSON null value ({"response_text": null}) falls
+    # back to raw_text rather than passing None to Pydantic's required str field.
+    response_text = parsed.get("response_text") or raw_text
+
+    # Flatten custom_field_updates — the AI occasionally emits nested dicts
+    # (e.g. {"clinical_trigger": {"type": "medication"}}) which fail Pydantic's
+    # dict[str, str|bool|int|float|None] type. Strip any non-primitive values.
+    raw_updates = parsed.get("custom_field_updates") or {}
+    if isinstance(raw_updates, dict):
+        flat_updates: dict[str, str | bool | int | float | None] = {
+            k: v
+            for k, v in raw_updates.items()
+            if isinstance(v, (str, bool, int, float)) or v is None
+        }
+    else:
+        flat_updates = {}
+
     return AIResponse(
-        response_text=parsed.get("response_text", raw_text),
+        response_text=response_text,
         buyer_stage=parsed.get("buyer_stage", "awareness"),
         intent_signals=parsed.get("intent_signals", []),
         conversion_ready=parsed.get("conversion_ready", False),
         suggested_quick_replies=parsed.get("suggested_quick_replies", []),
-        custom_field_updates=parsed.get("custom_field_updates", {}),
+        custom_field_updates=flat_updates,
         compliance_flags=parsed.get("compliance_flags", []),
         model_used=_RESPONSE_MODEL,
         tokens_used=tokens_used,

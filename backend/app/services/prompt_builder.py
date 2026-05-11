@@ -404,7 +404,7 @@ def build_user_message(context: ConversationContext) -> str:
     profile_parts = [f"Channel: {sub.channel}"]
     if sub.first_name:
         profile_parts.append(f"Name: {sub.first_name} {sub.last_name or ''}".strip())
-    profile_parts.append(f"Buyer Stage: {sub.buyer_stage}")
+    profile_parts.append(f"attora_buyer_stage: {sub.buyer_stage}")
     if sub.interests:
         profile_parts.append(f"Interests: {', '.join(sub.interests)}")
     if sub.objections_raised:

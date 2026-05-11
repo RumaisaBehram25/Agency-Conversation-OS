@@ -62,14 +62,14 @@ INTENT DEFINITIONS:
 - question: Asking about products, services, features, pricing.
 - objection: Expressing concerns, hesitations, price complaints, competitor comparisons.
 - purchase_intent: Expressing desire to buy, asking how to order, requesting checkout link.
-- browsing: Casual exploration, "just looking", vague interest.
+- browsing: Casual exploration, "just looking", vague interest. Also use for health/medical disclosures (surgery, injury, medications, diagnoses, conditions) — these require a full AI response even if not product-related.
 - support: Post-purchase help, issues with existing order, account problems.
-- off_topic: Unrelated to products/services (weather, politics, random chat).
+- off_topic: Truly unrelated to health, fitness, or products (weather, politics, sports scores, random chat).
 - spam: Promotional content, bot-like messages, gibberish.
 
 is_simple RULES:
 - Set true for: greetings, simple thank-you messages, one-word acknowledgments, spam, off_topic
-- Set false for: questions, objections, purchase_intent, complex support requests
+- Set false for: questions, objections, purchase_intent, browsing, complex support requests, ANY message mentioning surgery, injury, medication, diagnosis, or health conditions
 
 LANGUAGE: Use ISO 639-1 codes (en, es, pt, fr, etc.)
 CONFIDENCE: 0.0 to 1.0 — how confident you are in the classification."""

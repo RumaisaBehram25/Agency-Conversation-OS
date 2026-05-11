@@ -9,7 +9,7 @@ version that adds:
 The booking link is stored as the [CALL_LINK] token and resolved at
 prompt-build time from the WARRIOR_BABE_CALL_LINK environment variable.
 
-Revision ID: 023_warrior_babe_escalation_logic
+Revision ID: 023_wb_escalation
 Revises: 022_instagram_outbound_flow_ns
 Create Date: 2026-05-11
 """
@@ -21,7 +21,7 @@ from alembic import op
 from sqlalchemy import text
 
 
-revision: str = "023_warrior_babe_escalation_logic"
+revision: str = "023_wb_escalation"
 down_revision: Union[str, None] = "022_instagram_outbound_flow_ns"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None

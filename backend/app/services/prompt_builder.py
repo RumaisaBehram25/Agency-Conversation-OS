@@ -321,9 +321,21 @@ def build_system_prompt(
     campaign_script = org_config.campaign_scripts.get(attora_campaign_id or "") if attora_campaign_id else None
     if campaign_script:
         resolved_script = campaign_script.replace("[CALL_LINK]", settings.warrior_babe_call_link)
+        logger.warning(
+            "PROMPT_BUILDER campaign_script injected | org=%s campaign=%s | first_200=%r",
+            org_config.ai_config.org_id if hasattr(org_config.ai_config, "org_id") else "?",
+            attora_campaign_id,
+            resolved_script[:200],
+        )
         sections.append(f"## CAMPAIGN SCRIPT\n{resolved_script}")
     elif ai.conversion_playbook:
         resolved_playbook = ai.conversion_playbook.replace("[CALL_LINK]", settings.warrior_babe_call_link)
+        logger.warning(
+            "PROMPT_BUILDER conversion_playbook injected | org=%s | chars=%d | first_500=%r",
+            getattr(ai, "org_id", "?"),
+            len(resolved_playbook),
+            resolved_playbook[:500],
+        )
         sections.append(f"## CONVERSION PLAYBOOK\n{resolved_playbook}")
 
     # Section 6: Objection Handlers

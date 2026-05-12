@@ -24,6 +24,7 @@ import uuid
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import settings
 from app.schemas.ai_engine import AIResponse, IntentType
 from app.utils.dm_links import DmSubscriberView, build_dm_link
 from app.services.campaign_utm_resolver import (
@@ -499,6 +500,16 @@ def _inject_purchase_link_if_needed(
     msg = (message or "").lower()
 
     urls = subscriber_tagged_urls or {}
+
+    # Clinical/handoff escalation: if the AI's response already routed the lead
+    # to a team call (booking link is in the text), do NOT append a product or
+    # checkout URL alongside. The clinical/post-purchase escalation flow owns
+    # the response — adding a purchase link dilutes the call CTA and confuses
+    # leads being handed off (e.g. PCOS → call link should not be paired with
+    # a Macro Method product URL).
+    call_link = settings.warrior_babe_call_link
+    if call_link and call_link in text:
+        return
 
     # Past-tense purchase confirmations ("I just bought it", "got it", "I'm in").
     # Don't send any link — they already paid. Direct them to check their

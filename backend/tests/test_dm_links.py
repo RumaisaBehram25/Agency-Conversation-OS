@@ -24,6 +24,8 @@ def test_build_dm_link_all_identity_and_utm_present() -> None:
     assert q["attora_sub"] == ["mc_x"]
     assert q["attora_id"] == [str(uid)]
     assert q["utm_content"] == ["legacy"]
+    assert len(q["attora_ts"]) == 1
+    assert int(q["attora_ts"][0]) > 0
 
 
 def test_build_dm_link_omits_attora_id_when_missing() -> None:

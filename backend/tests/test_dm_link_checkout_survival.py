@@ -41,3 +41,4 @@ def test_attribution_survives_landing_to_checkout_via_merge() -> None:
     assert qs["utm_medium"] == ["dm"]
     assert qs["utm_campaign"] == ["spring-sale"]
     assert qs["utm_source"] == ["instagram"]
+    assert len(qs["attora_ts"]) == 1 and int(qs["attora_ts"][0]) > 0

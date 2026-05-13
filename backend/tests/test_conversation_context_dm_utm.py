@@ -5,6 +5,7 @@ from __future__ import annotations
 import uuid
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
+from urllib.parse import parse_qs, urlparse
 
 import pytest
 
@@ -43,6 +44,8 @@ def test_build_dm_link_uses_populated_dm_utm_context_fields() -> None:
     assert "utm_campaign=summer-bundle" in stamped
     assert "utm_source=instagram" in stamped
     assert "utm_medium=dm" in stamped
+    ts = parse_qs(urlparse(stamped).query).get("attora_ts", [])
+    assert len(ts) == 1 and int(ts[0]) > 0
 
 
 @pytest.mark.asyncio

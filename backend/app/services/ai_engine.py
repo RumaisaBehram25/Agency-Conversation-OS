@@ -123,9 +123,10 @@ async def _load_subscriber_tagged_urls(
     """
     Look up the campaign's UTM URLs and stamp per-subscriber attribution.
 
-    Each returned URL carries attora_sub (ManyChat ID) and attora_id (Attora
-    UUID) so the landing page can attribute the conversion back to this exact
-    lead via /api/conversions/track.
+    Each returned URL carries attora_sub (ManyChat ID), attora_id (Attora UUID),
+    and attora_ts (unix seconds at stamp time) so links are unique per send and
+    the landing page can attribute the conversion back to this exact lead via
+    /api/conversions/track.
 
     Returns a dict with keys "product_page", "checkout", "success" — only entries
     with a configured URL are included. Non-fatal on any failure; returns {}.

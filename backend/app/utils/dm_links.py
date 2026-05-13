@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any
 
 from app.schemas.campaign import build_utm_url
@@ -73,19 +74,18 @@ def build_dm_link(
     """
     Append DM attribution query params, merging with any existing query string.
 
-    Params (each omitted when value is missing):
-      - attora_sub ← subscriber.manychat_subscriber_id
-      - attora_id ← str(subscriber.id) when id is a valid UUID
-      - utm_source ← `source`
-      - utm_medium ← always ``dm`` when any param is written; see below
+    Identity and UTM params are omitted when their values are missing;
+    ``utm_medium`` (always ``dm``) and ``attora_ts`` (unix seconds at stamp time)
+    are always set so each outbound link is unique for attribution tools.
 
-    `campaign_id` is written as ``utm_campaign``. Both `campaign_id` and
-    `source` are stripped; blank values are skipped.
-
-    Always sets ``utm_medium=dm`` so outbound DM links are distinguishable in
-    analytics even when campaign UTM strings are absent.
+    Optional params (stripped; blank omitted):
+      - attora_sub, attora_id — subscriber identity for conversion tracking
+      - utm_source ← ``source``, utm_campaign ← ``campaign_id``
     """
-    params: dict[str, str] = {"utm_medium": "dm"}
+    params: dict[str, str] = {
+        "utm_medium": "dm",
+        "attora_ts": str(int(datetime.now().timestamp())),
+    }
 
     src = str(source).strip() if source else ""
     if src:

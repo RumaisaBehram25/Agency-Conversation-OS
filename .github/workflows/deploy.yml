@@ -61,6 +61,7 @@ jobs:
             echo "HYROS_SYNC_SCHEDULER_CRON=${{ secrets.HYROS_SYNC_SCHEDULER_CRON }}" >> .env
             echo "FOLLOW_UP_SCHEDULER_ENABLED=${{ secrets.FOLLOW_UP_SCHEDULER_ENABLED }}" >> .env
             echo "FOLLOW_UP_SCHEDULER_CRON=${{ secrets.FOLLOW_UP_SCHEDULER_CRON }}" >> .env
+            echo "RESEND_API_KEY=${{ secrets.RESEND_API_KEY }}" >> .env
 
             echo ">>> Restarting Docker..."
             docker-compose down --remove-orphans

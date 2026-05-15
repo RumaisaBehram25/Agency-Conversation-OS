@@ -40,6 +40,9 @@ anthropic==0.42.0
 # PDF Parsing
 pdfplumber==0.11.4
 
+# Email (Resend)
+resend==2.4.0
+
 # Utilities
 python-multipart==0.0.20
 python-dotenv==1.0.1

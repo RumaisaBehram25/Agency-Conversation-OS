@@ -31,6 +31,7 @@ from app.models.analytics import DailyAnalytics
 from app.models.campaign_metrics import CampaignBreakdown, CampaignMetric
 from app.models.conversation import Conversation
 from app.models.message import Message
+from app.jobs.email_queue_processor import process_email_queue
 from app.jobs.hyros_sync import sync_hyros_purchases
 from app.services.follow_up_engine import dispatch_follow_ups
 
@@ -365,9 +366,16 @@ async def _run_follow_up_dispatch() -> None:
         logger.info("Scheduled follow-up dispatch result: %s", result)
 
 
+async def _run_email_queue_processor() -> None:
+    async with async_session_factory() as session:
+        result = await process_email_queue(session)
+        await session.commit()
+        logger.info("Scheduled email queue processor result: %s", result)
+
+
 def build_follow_up_scheduler() -> AsyncIOScheduler:
     """
-    APScheduler with only the follow-up dispatch job.
+    APScheduler for follow-up dispatch and the email queue processor.
 
     Used by the FastAPI app lifespan. OLAP / Hyros cron jobs stay in
     ``python -m app.jobs.scheduler`` (see ``build_scheduler``).
@@ -377,6 +385,13 @@ def build_follow_up_scheduler() -> AsyncIOScheduler:
         _run_follow_up_dispatch,
         CronTrigger.from_crontab(settings.follow_up_scheduler_cron, timezone=settings.olap_scheduler_timezone),
         id="follow-up-dispatch",
+        replace_existing=True,
+        max_instances=1,
+    )
+    scheduler.add_job(
+        _run_email_queue_processor,
+        CronTrigger.from_crontab("*/15 * * * *", timezone=settings.olap_scheduler_timezone),
+        id="email-queue-processor",
         replace_existing=True,
         max_instances=1,
     )

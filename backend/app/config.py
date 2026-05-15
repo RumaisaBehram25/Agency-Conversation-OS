@@ -55,6 +55,9 @@ class Settings(BaseSettings):
     anthropic_api_key: str = ""
     hyros_api_key: str = ""
 
+    # ── Transactional email (Resend) ──────────────────────────
+    resend_api_key: str = ""
+
     # ── Warrior Babe ──────────────────────────────────────────
     warrior_babe_call_link: str = "https://www.warriorbabe.com/schedule-apply"
 

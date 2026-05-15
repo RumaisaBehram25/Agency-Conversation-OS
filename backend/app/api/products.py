@@ -15,6 +15,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
+from app.jobs.email_triggers import new_product_email_sweep
 from app.models.product import Product
 from app.models.user import User
 from app.schemas.product import ProductCreate, ProductResponse, ProductUpdate
@@ -63,6 +64,8 @@ async def create_product(
     db.add(product)
     await db.flush()
     await db.refresh(product)
+
+    await new_product_email_sweep(db, org_id=org_id, product_id=product.id)
 
     return ProductResponse.model_validate(product)
 

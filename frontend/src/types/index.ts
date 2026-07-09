@@ -173,6 +173,10 @@ export interface SubscriberConversation {
   message_count: number;
   started_at: string | null;
   last_activity_at: string | null;
+  summary?: string | null;
+  closed_at?: string | null;
+  follow_up_attempts?: number;
+  last_follow_up_at?: string | null;
 }
 
 export interface SubscriberDetail {
@@ -202,11 +206,19 @@ export interface SubscriberDetail {
   hyros_synced_at: string | null;
   first_message_at: string | null;
   last_message_at: string | null;
+  last_user_message_at?: string | null;
   total_messages: number;
   utm_source?: string | null;
   utm_medium?: string | null;
   utm_campaign?: string | null;
   utm_content?: string | null;
+  ctwa_clid?: string | null;
+  ad_id?: string | null;
+  post_id?: string | null;
+  ad_set_id?: string | null;
+  campaign_id?: string | null;
+  attora_campaign_id?: string | null;
+  history?: unknown;
   created_at: string;
   updated_at: string;
   conversations: SubscriberConversation[];

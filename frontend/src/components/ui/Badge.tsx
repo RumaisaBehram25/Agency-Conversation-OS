@@ -16,12 +16,12 @@ interface BadgeProps {
 
 const colorClasses: Record<BadgeColor, string> = {
   gray: 'bg-gray-100 text-gray-700',
-  blue: 'bg-blue-100 text-blue-700',
+  blue: 'bg-primary-100 text-primary-800',
   green: 'bg-green-100 text-green-700',
   yellow: 'bg-yellow-100 text-yellow-800',
   red: 'bg-red-100 text-red-700',
   purple: 'bg-purple-100 text-purple-700',
-  indigo: 'bg-indigo-100 text-indigo-700',
+  indigo: 'bg-primary-100 text-primary-800',
   pink: 'bg-pink-100 text-pink-700',
 };
 
@@ -42,12 +42,13 @@ export default function Badge({
 // Helpers for common badge mappings
 export function buyerStageBadgeColor(stage: string): BadgeColor {
   const map: Record<string, BadgeColor> = {
-    awareness: 'blue',
-    interest: 'indigo',
+    awareness: 'red',
+    interest: 'yellow',
     consideration: 'purple',
     intent: 'yellow',
     evaluation: 'pink',
     purchase: 'green',
+    post_purchase: 'green',
     converted: 'green',
   };
   return map[stage?.toLowerCase()] || 'gray';
@@ -65,8 +66,9 @@ export function statusBadgeColor(status: string): BadgeColor {
 
 export function channelBadgeColor(channel: string): BadgeColor {
   const map: Record<string, BadgeColor> = {
-    messenger: 'blue',
+    messenger: 'gray',
     instagram: 'pink',
+    whatsapp: 'purple',
   };
   return map[channel?.toLowerCase()] || 'gray';
 }

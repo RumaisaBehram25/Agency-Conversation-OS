@@ -1,7 +1,14 @@
 # Attora
->>>
 
 White-labeled ManyChat platform with an AI conversation engine and Revenue Activation System (RAS) dashboard. Attora plugs into ManyChat via the External Request action, classifies subscriber intent with Claude Haiku, generates contextual sales responses with Claude Sonnet, and feeds conversion data back to Meta ads through the Conversions API.
+
+**Production capabilities today:**
+
+- **Campaigns & DM links** — per-org campaigns with UTM funnel URLs stamped with `attora_sub` (ManyChat id) and `attora_id` (Attora UUID) on every outbound link
+- **Hyros** — periodic purchase sync; match leads by `attora_id` → `attora_sub` → email; suppress follow-ups when purchased
+- **Follow-ups** — timed nudge sequences per campaign; Attora decides when to send; ManyChat delivers via `manychat_outbound_flow_ns`
+- **Storefront tracking** — `POST /api/conversions/track` for lead / initiate_checkout / purchase (+ optional Meta CAPI)
+- **Analytics** — Meta ad spend sync, organic vs paid breakdown, Hyros purchase metrics in the dashboard
 
 ## Architecture
 
@@ -19,6 +26,8 @@ White-labeled ManyChat platform with an AI conversation engine and Revenue Activ
 │  (CAPI)      │     │                   │ :6379 │      │  Haiku + Sonnet    │  │
 └──────────────┘     │                   └───────┘      └────────────────────┘  │
                      └──────────────────────────────────────────────────────────┘
+
+**External integrations:** ManyChat (webhook + outbound flows), Meta Marketing API (ad spend) + CAPI (conversions), Hyros (purchase attribution), Anthropic Claude (AI pipeline), optional S3/Trino OLAP lake.
 ```
 
 **Four Docker services:**
@@ -31,6 +40,20 @@ White-labeled ManyChat platform with an AI conversation engine and Revenue Activ
 | `redis` | redis:7-alpine | 6379 | Cache, rate limiting, session context |
 
 nginx serves the React build at `/` and proxies `/api/*` requests to the FastAPI backend.
+
+**Optional Docker profiles:**
+
+| Profile | Service | Purpose |
+|---------|---------|---------|
+| `olap-selfhosted` | `scheduler` + MinIO + Trino | OLAP exports, archives, parity checks |
+| `hyros-scheduler` | `hyros-scheduler` | Hyros purchase sync + follow-up dispatch (no OLAP stack) |
+
+```bash
+# Hyros sync (every 3h) + follow-ups (every 15m) — set env flags in .env first
+docker compose --profile hyros-scheduler up -d hyros-scheduler
+```
+
+Requires `HYROS_SYNC_SCHEDULER_ENABLED=true` and/or `FOLLOW_UP_SCHEDULER_ENABLED=true`, plus org-level `manychat_outbound_flow_ns` for follow-ups to actually send.
 
 ## Quick Start
 
@@ -57,7 +80,7 @@ JWT_SECRET_KEY=your-random-jwt-secret-at-least-32-chars
 ENCRYPTION_KEY=$(python3 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())")
 
 # Your Anthropic API key
-ANTHROPIC_API_KEY=sk-ant-REDACTED-PLACEHOLDER...
+ANTHROPIC_API_KEY=sk-ant-api03-...
 ```
 
 ### 2. Start the stack
@@ -123,7 +146,7 @@ Checkpoint metadata is stored in object storage under the configured checkpoint 
 docker-compose exec api alembic upgrade head
 ```
 
-This creates all 10 tables, 6 enums, and indexes.
+This applies all Alembic migrations (campaigns, Hyros fields, follow-up workflow, email queue, playbook seeds, etc.).
 
 ### 4. Seed the knowledge base
 
@@ -154,25 +177,34 @@ users ─────┐
 org_users ─┤
            │
 organizations ──┬── products
+                ├── ad_campaigns ─── campaign_utms
+                │              └── campaign_follow_ups
                 ├── ai_config (one per org)
                 ├── subscribers ──── conversations ──── messages
                 ├── conversion_events
-                └── daily_analytics
+                ├── hyros_sync_logs
+                ├── manychat_events
+                ├── email_queue / email_log
+                └── daily_analytics (+ campaign_metrics)
 ```
 
 ### Key tables
 
 | Table | Purpose |
 |-------|---------|
-| `organizations` | Tenant. Stores ManyChat credentials, Meta CAPI tokens, and the Attora API key (all Fernet-encrypted). |
+| `organizations` | Tenant. ManyChat + Meta credentials, `attora_api_key`, optional `manychat_outbound_flow_ns` for follow-up delivery (Fernet-encrypted secrets). |
 | `users` / `org_users` | Users belong to orgs via a join table with roles: `owner`, `admin`, `member`, `viewer`. |
-| `products` | Product catalog per org. JSONB fields for eligibility criteria and objection responses. |
+| `products` | Product catalog per org (price, checkout URLs, conversion value, objection responses). |
+| `ad_campaigns` | Registered campaigns (paid Meta id or organic `keyword`). Links to a product and optional `conversation_script`. |
+| `campaign_utms` | Funnel URLs with baked-in `utm_*`; per-subscriber URLs add `attora_sub`, `attora_id`, `utm_medium=dm`. |
+| `campaign_follow_ups` | Per-campaign nudge sequence (`step_order`, `after_minutes`, message with optional `[LINK]`). |
 | `ai_config` | Per-org AI tuning: brand voice, persona, compliance rules, conversion playbook, objection handlers. |
-| `subscribers` | ManyChat subscriber mirror. Tracks buyer stage, interests, objections, attribution (ctwa_clid, ad IDs). |
-| `conversations` | One per subscriber session. Tracks status (active/converted/stale/closed) and response time metrics. |
-| `messages` | Individual messages with AI metadata: model used, tokens, response time, intent, compliance flags. |
-| `conversion_events` | Tracks conversions for Meta CAPI attribution: lead, initiate_checkout, purchase, upsell. |
-| `daily_analytics` | Pre-aggregated daily metrics per org/channel. Populated by the `daily_digest` cron job. |
+| `subscribers` | ManyChat mirror + buyer stage, UTMs, Hyros purchase flags, `attora_campaign_id`, `last_user_message_at` (follow-up silence anchor). |
+| `conversations` | Sessions with `follow_up_attempts`, `last_follow_up_at`, status, message counts. |
+| `messages` | Messages with AI metadata; `is_follow_up` distinguishes nudges from live AI replies. |
+| `conversion_events` | Storefront/CAPI events: `lead`, `initiate_checkout`, `purchase`, `upsell`. |
+| `hyros_sync_logs` | Per-org sync run stats (match rate, matched_by attora_id / attora_sub / email). |
+| `daily_analytics` | Pre-aggregated daily metrics. Populated by `daily_digest` + ad spend sync. |
 
 ### Per-Org Credentials
 
@@ -286,9 +318,19 @@ The webhook authenticates via `X-Attora-Key` (not JWT). Each org gets a unique A
     }
   },
   "last_input_text": "How much does the starter plan cost?",
-  "channel": "whatsapp"
+  "channel": "instagram",
+  "keyword": "MUSCLE",
+  "attora_campaign_id": "uuid-of-ad_campaign",
+  "flow_id": "manychat-flow-ns"
 }
 ```
+
+**ManyChat flow tips:**
+
+- First External Request after welcome DM: hardcode `"Send me the link"` as `last_input_text` (not `{{attora_last_input}}`).
+- Loop External Request: use ManyChat's **Last Input Text** system field for `last_input_text`.
+- Outbound follow-up flow: trigger tag `xattora_never_fires_x`; send `{{cuf_attora_outbound_message}}` (set by Attora via ManyChat API before each nudge).
+- ManyChat v2 responses can include `content.messages[]` — you may omit a separate Send Message node if the webhook returns text.
 
 **Response** (ManyChat v2 format):
 ```json
@@ -308,6 +350,88 @@ The webhook authenticates via `X-Attora-Key` (not JWT). Each org gets a unique A
   }
 }
 ```
+
+## Campaigns & DM Attribution
+
+Campaigns tie a product to a keyword (organic) or Meta ad campaign id (paid). Each campaign has one or more **funnel URLs** (`campaign_utms`) with `utm_source`, `utm_medium`, `utm_campaign`, etc.
+
+When the AI sends a checkout or funnel link, `build_dm_link()` appends per-subscriber params:
+
+| Param | Meaning |
+|-------|---------|
+| `attora_sub` | ManyChat subscriber id |
+| `attora_id` | Attora subscriber UUID |
+| `utm_medium` | `dm` (overrides funnel default for DM context) |
+
+Example DM link:
+
+```
+https://shop.example.com/macros?utm_campaign=eat-more-transformation-macros&utm_source=attora&utm_medium=dm&attora_id=ad1df68d-...&attora_sub=1748217985
+```
+
+**API:** `/api/campaigns` (CRUD), `/api/campaign-metrics` (aggregated spend/conversion facts).
+
+**Dashboard:** `/campaigns` — manage campaigns and UTM rows.
+
+## Hyros Purchase Sync
+
+Organizations store a per-tenant `hyros_api_key`. The sync job pulls recent Hyros sales and matches them to subscribers:
+
+1. `attora_id` (Attora UUID in Hyros lead source)
+2. `attora_sub` (ManyChat id)
+3. Email fallback
+
+On match, the subscriber is marked purchased, follow-ups are suppressed, and conversion metrics feed analytics.
+
+**Cron:** `POST /api/cron/hyros-sync` (or enable `HYROS_SYNC_SCHEDULER_ENABLED=true` on the `hyros-scheduler` container; default cron every **3 hours**).
+
+**Hyros account setup:** URL rules must capture `attora_id` and `attora_sub` from landing URLs. Rule **order** matters — first-touch attribution is configured in Hyros, not in Attora code.
+
+See `docs/hyros_attora_id_mapping.md` for field mapping details.
+
+## Follow-Up Nudges
+
+Silent leads (no user message after the AI link) receive timed nudges per `campaign_follow_ups`:
+
+| Campaign | Typical cadence |
+|----------|-----------------|
+| MUSCLE | 60m, 3h, 12h (3 touches) |
+| MACROS | 60m, 3h, 12h, 24h (4 touches) |
+
+**How it works:**
+
+1. Attora `follow_up_engine` finds eligible conversations (`last_user_message_at` anchor, not purchased, under max attempts).
+2. Writes message text to ManyChat custom field `attora_outbound_message`.
+3. Triggers the org's `manychat_outbound_flow_ns` outbound flow (Human Agent tag window — not the 24h messaging window).
+
+**Cron:** `POST /api/cron/follow-ups` with optional `?dry_run=true` (or `FOLLOW_UP_SCHEDULER_ENABLED=true` on `hyros-scheduler`).
+
+**One-time setup:**
+
+```bash
+# Seed MUSCLE/MACROS sequences (run against prod DB)
+python scripts/seed_warrior_babe_followups.py
+
+# Set org.manychat_outbound_flow_ns in DB or via settings API
+```
+
+## Storefront Conversions
+
+Merchant checkout pages POST events to Attora (no JWT — uses org context from attribution params):
+
+```
+POST /api/conversions/track
+```
+
+| `conversion_type` | Use |
+|-------------------|-----|
+| `lead` | Email/opt-in captured |
+| `initiate_checkout` | Checkout started |
+| `purchase` | Order completed |
+
+Include `attora_sub`, `attora_id`, and UTMs in the body. Optionally fires Meta CAPI when org credentials are set.
+
+**Client script:** `docs/storefront-attribution.js` — captures URL params into `localStorage` and re-appends them to checkout links. Drop in product/funnel pages; thank-you page should still POST to `/api/conversions/track`.
 
 ## Meta Conversions API
 
@@ -395,12 +519,57 @@ Configurable fields: `brand_voice`, `persona_name`, `product_knowledge`, `compli
 | `/api/settings` | GET | Org settings (API keys masked) |
 | `/api/settings` | PUT | Update settings (owner/admin, encrypts secrets on save) |
 
-### Cron Jobs
+### Campaigns
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/campaigns` | GET/POST | List / create campaigns |
+| `/api/campaigns/{id}` | GET/PUT/DELETE | Campaign CRUD |
+| `/api/campaigns/{id}/utms` | GET/POST | Funnel UTM rows |
+| `/api/campaign-metrics` | GET | Campaign-level spend and conversion metrics |
+
+### Conversions (storefront)
 
 | Endpoint | Method | Auth | Description |
 |----------|--------|------|-------------|
-| `/api/cron/stale-conversations` | POST | `X-Cron-Secret` | Mark conversations inactive >24h as stale |
-| `/api/cron/daily-digest` | POST | `X-Cron-Secret` | Aggregate raw data into `daily_analytics` |
+| `/api/conversions/track` | POST | Attribution params | Record lead / initiate_checkout / purchase |
+
+### AI test / Playground
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/ai-test/chat` | POST | Dry-run AI pipeline (dashboard Playground) |
+
+### Emails
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/emails/*` | varies | Email queue dispatch (when org email settings enabled) |
+
+### Cron Jobs
+
+All cron routes require header `X-Cron-Secret: <CRON_SECRET>`.
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/cron/stale-conversations` | POST | Mark conversations inactive >24h as stale |
+| `/api/cron/daily-digest` | POST | Aggregate into `daily_analytics` |
+| `/api/cron/ad-spend-sync` | POST | Pull Meta ad spend; dual-write campaign metrics |
+| `/api/cron/hyros-sync` | POST | Sync Hyros purchases onto subscribers |
+| `/api/cron/follow-ups` | POST | Dispatch due follow-up nudges (`?dry_run=true` for dry run) |
+| `/api/cron/export-ai-usage` | POST | Export AI usage events to OLAP |
+| `/api/cron/archive-messages` | POST | Archive old messages to OLAP |
+| `/api/cron/check-olap-parity` | POST | PostgreSQL vs Parquet parity check |
+
+**Self-hosted schedulers** (`backend/app/jobs/scheduler.py`):
+
+| Env flag | Default cron | Job |
+|----------|--------------|-----|
+| `OLAP_SCHEDULER_ENABLED` | nightly | OLAP exports, archives, parity |
+| `HYROS_SYNC_SCHEDULER_ENABLED` | `0 */3 * * *` | Hyros sync |
+| `FOLLOW_UP_SCHEDULER_ENABLED` | `*/15 * * * *` | Follow-up dispatch |
+
+Run via `docker compose --profile hyros-scheduler up hyros-scheduler` or call HTTP cron endpoints from an external scheduler (EventBridge, cron, etc.).
 
 ## React Dashboard
 
@@ -417,13 +586,16 @@ Single-page app built with React 18, TypeScript, Tailwind CSS 3, and Vite. Serve
 | `/leads` | Leads | Subscriber list with buyer stage and conversion filters |
 | `/leads/:id` | Lead Detail | Full subscriber profile with conversation history |
 | `/products` | Products | Product catalog management with modal forms |
-| `/ai-config` | AI Config | Brand voice, persona, compliance rules, objection handler editor |
-| `/analytics` | Analytics | Funnel chart, trend lines, ROI waterfall |
+| `/campaigns` | Campaigns | Campaign + UTM funnel URL management |
+| `/analytics` | Analytics | Funnel chart, trend lines, ROI waterfall, source breakdown |
+| `/playground` | Playground | Live AI pipeline test against org config |
 | `/settings` | Settings | Organization credentials (masked), key rotation |
+
+> **Note:** `AIConfigPage.tsx` exists in the codebase but is not wired in `App.tsx` today — AI config is editable via `PUT /api/ai-config` or DB seeds/migrations.
 
 ### Key Components
 
-- **Sidebar** — 7 navigation items with active state highlighting and org branding
+- **Sidebar** — navigation (dashboard, conversations, leads, products, campaigns, analytics, playground, settings)
 - **MetricCard** — Displays KPI with sparkline trend and color-coded change indicator
 - **CampaignHealth** — Traffic light system (green/yellow/red) for campaign status
 - **MessageBubble** — Chat-style bubbles distinguishing user, AI, and human messages
@@ -478,25 +650,32 @@ Static assets are cached with `Cache-Control: immutable` (1 year). Gzip compress
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `DATABASE_URL` | `postgresql+asyncpg://attora:Attora-123@attora-db.cp8ooqrtonyo.us-east-1.rds.amazonaws.com:5432/attora` | Async Postgres connection |
-| `DATABASE_URL_SYNC` | `postgresql://attora:Attora-123@attora-db.cp8ooqrtonyo.us-east-1.rds.amazonaws.com:5432/attora` | Sync connection (Alembic) |
-| `POSTGRES_USER` | `attora` | Postgres user |
-| `POSTGRES_PASSWORD` | `Attora-123` | Postgres password |
-| `POSTGRES_DB` | `attora` | Postgres database name |
+| `DATABASE_URL` | *(see `.env.example`)* | Async Postgres connection (`postgresql+asyncpg://...`) |
+| `DATABASE_URL_SYNC` | *(see `.env.example`)* | Sync connection for Alembic |
+| `POSTGRES_USER` / `POSTGRES_PASSWORD` / `POSTGRES_DB` | `attora` | Local Docker Postgres credentials |
 | `REDIS_URL` | `redis://redis:6379/0` | Redis connection |
 | `JWT_SECRET_KEY` | `change-me-...` | **Must change.** JWT signing secret (32+ chars) |
 | `JWT_ALGORITHM` | `HS256` | JWT algorithm |
 | `ACCESS_TOKEN_EXPIRE_MINUTES` | `30` | Access token TTL |
 | `REFRESH_TOKEN_EXPIRE_DAYS` | `7` | Refresh token TTL |
 | `ENCRYPTION_KEY` | `change-me-...` | **Must change.** Fernet key for field encryption |
-| `CORS_ORIGINS` | `http://localhost:3000,http://localhost:8080` | Allowed CORS origins (comma-separated) |
+| `CORS_ORIGINS` | `http://localhost:3000,...` | Allowed CORS origins (comma-separated) |
 | `RATE_LIMIT_PER_MINUTE` | `100` | Max requests per minute per IP |
 | `ANTHROPIC_API_KEY` | (empty) | **Required.** Anthropic API key for Claude |
-| `CRON_SECRET` | `change-me-...` | Secret for cron job authentication |
+| `WARRIOR_BABE_CALL_LINK` | Warrior Babe schedule URL | Injected into escalation playbook at runtime |
+| `CRON_SECRET` | `change-me-...` | Secret for `X-Cron-Secret` on cron routes |
+| `HYROS_SYNC_SCHEDULER_ENABLED` | `false` | Enable Hyros sync inside `hyros-scheduler` |
+| `HYROS_SYNC_SCHEDULER_CRON` | `0 */3 * * *` | Hyros sync schedule (every 3 hours) |
+| `FOLLOW_UP_SCHEDULER_ENABLED` | `false` | Enable follow-up dispatch inside `hyros-scheduler` |
+| `FOLLOW_UP_SCHEDULER_CRON` | `*/15 * * * *` | Follow-up cadence (every 15 minutes) |
+| `OLAP_SCHEDULER_ENABLED` | `false` | Enable OLAP export/archive jobs |
+| `OLAP_*` | various | S3/MinIO lake, Trino, Athena settings (see `.env.example`) |
 | `APP_NAME` | `Attora` | Application name |
 | `APP_ENV` | `development` | Environment (development/staging/production) |
-| `DEBUG` | `true` | Enables API docs at `/api/docs` |
+| `DEBUG` | `true` | When `true`, exposes `/api/docs` |
 | `LOG_LEVEL` | `INFO` | Logging level |
+
+Copy `.env.example` to `.env` and replace placeholder secrets. **Do not commit production database URLs or API keys.**
 
 ## Tech Stack
 
@@ -541,152 +720,50 @@ attora/
 │   ├── requirements.txt
 │   ├── alembic/
 │   │   ├── alembic.ini
-│   │   └── versions/
-│   │       └── 001_initial_schema.py
+│   │   └── versions/              # 29+ migrations (campaigns, Hyros, follow-ups, email, …)
 │   └── app/
-│       ├── main.py                  # FastAPI app, middleware, lifecycle
-│       ├── config.py                # Pydantic settings from env
-│       ├── database.py              # Async SQLAlchemy engine + sessions
-│       ├── redis.py                 # Redis connection pool
+│       ├── main.py
+│       ├── config.py
 │       ├── api/
-│       │   ├── __init__.py          # Router registry
-│       │   ├── deps.py              # Shared dependencies (auth, org, db)
-│       │   ├── auth.py              # Register, login, refresh, me
-│       │   ├── health.py            # Health + liveness endpoints
-│       │   ├── organizations.py     # Org CRUD + key rotation
-│       │   ├── manychat_webhook.py  # ManyChat External Request handler
-│       │   ├── products.py          # Product CRUD
-│       │   ├── ai_config.py         # AI config get/upsert
-│       │   ├── conversations.py     # Conversation list + detail
-│       │   ├── subscribers.py       # Subscriber/lead list + detail
-│       │   ├── analytics.py         # Metrics, ROI, AI performance, CSV
-│       │   ├── dashboard.py         # Dashboard overview
-│       │   ├── settings.py          # Org settings (masked)
-│       │   └── cron.py              # Stale conversations + daily digest
-│       ├── models/
-│       │   ├── base.py              # Base class, mixins, enums
-│       │   ├── organization.py      # Org with ManyChat/Meta fields
-│       │   ├── user.py              # User + OrgUser join table
-│       │   ├── product.py           # Product with JSONB fields
-│       │   ├── ai_config.py         # Per-org AI configuration
-│       │   ├── subscriber.py        # ManyChat subscriber mirror
-│       │   ├── conversation.py      # Conversation sessions
-│       │   ├── message.py           # Messages with AI metadata
-│       │   ├── conversion.py        # Conversion events for CAPI
-│       │   └── analytics.py         # Pre-aggregated daily metrics
-│       ├── schemas/
-│       │   ├── auth.py              # Auth request/response DTOs
-│       │   ├── manychat.py          # ManyChat webhook models
-│       │   ├── ai_engine.py         # AI pipeline DTOs
-│       │   ├── product.py           # Product CRUD DTOs
-│       │   ├── ai_config.py         # AI config DTOs
-│       │   ├── conversation.py      # Conversation DTOs
-│       │   ├── subscriber.py        # Subscriber DTOs
-│       │   ├── analytics.py         # Analytics response DTOs
-│       │   ├── dashboard.py         # Dashboard response DTOs
-│       │   ├── settings.py          # Settings DTOs (masked)
-│       │   └── pagination.py        # Generic PaginatedResponse[T]
+│       │   ├── manychat_webhook.py
+│       │   ├── campaigns.py / campaign_metrics.py
+│       │   ├── conversions.py
+│       │   ├── cron.py
+│       │   ├── hyros (via cron + hyros_service)
+│       │   ├── ai_test.py / emails.py / olap.py / diagnostics.py
+│       │   └── … (auth, subscribers, analytics, dashboard, settings)
+│       ├── models/                  # org, subscriber, ad_campaign, campaign_utm, …
 │       ├── services/
-│       │   ├── ai_engine.py         # Pipeline orchestrator (10s budget)
-│       │   ├── classifier.py        # Intent classification (Haiku)
-│       │   ├── response_generator.py # Response generation (Sonnet)
-│       │   ├── buyer_stage.py       # Buyer stage engine
-│       │   ├── output_validator.py  # 4-layer hallucination defense
-│       │   ├── context_manager.py   # Conversation context load/store
-│       │   ├── config_loader.py     # Redis-cached org config
-│       │   ├── prompt_builder.py    # System prompt construction
-│       │   ├── fallback.py          # Pre-written safe responses
-│       │   └── analytics_service.py # Analytics aggregation
+│       │   ├── ai_engine.py / classifier.py / response_generator.py
+│       │   ├── follow_up_engine.py
+│       │   ├── hyros_service.py
+│       │   └── analytics_service.py
 │       ├── integrations/
-│       │   ├── messaging/
-│       │   │   ├── adapter.py       # Abstract messaging interface
-│       │   │   └── manychat.py      # ManyChat API client
-│       │   └── meta/
-│       │       └── capi.py          # Meta Conversions API client
-│       ├── security/
-│       │   ├── auth.py              # JWT + bcrypt password utilities
-│       │   └── encryption.py        # Fernet encrypt/decrypt/mask
-│       ├── middleware/
-│       │   └── rate_limit.py        # Redis sliding window rate limiter
-│       └── jobs/
-│           ├── stale_conversations.py # Mark inactive conversations
-│           └── daily_digest.py       # Aggregate daily analytics
+│       │   ├── messaging/manychat.py
+│       │   └── meta/capi.py
+│       ├── jobs/
+│       │   ├── scheduler.py         # APScheduler (Hyros, follow-ups, OLAP)
+│       │   ├── hyros_sync.py
+│       │   ├── ad_spend_sync.py
+│       │   ├── stale_conversations.py
+│       │   └── daily_digest.py
+│       └── utils/
+│           └── dm_links.py          # attora_sub / attora_id on outbound URLs
+│
+├── scripts/
+│   └── seed_warrior_babe_followups.py
+├── docs/
+│   ├── storefront-attribution.js
+│   ├── hyros_attora_id_mapping.md
+│   └── warrior_babe_ai_config_summary.txt
 │
 └── frontend/
-    ├── Dockerfile
-    ├── nginx.conf
-    ├── package.json
-    ├── tsconfig.json
-    ├── vite.config.ts
-    ├── tailwind.config.js
-    ├── postcss.config.js
     └── src/
-        ├── App.tsx                   # Router setup
-        ├── main.tsx                  # React entry point
-        ├── types/index.ts            # TypeScript interfaces
-        ├── utils/formatters.ts       # Currency, date, percentage formatting
-        ├── api/
-        │   ├── client.ts            # Axios with auth interceptors
-        │   ├── auth.ts              # Auth endpoints
-        │   ├── dashboard.ts         # Dashboard endpoint
-        │   ├── analytics.ts         # Analytics endpoints
-        │   ├── conversations.ts     # Conversation endpoints
-        │   ├── subscribers.ts       # Subscriber endpoints
-        │   ├── products.ts          # Product endpoints
-        │   ├── aiConfig.ts          # AI config endpoints
-        │   └── settings.ts          # Settings endpoints
-        ├── contexts/
-        │   └── AuthContext.tsx       # Auth state + token management
-        ├── hooks/
-        │   └── useAuth.ts           # Auth hook
         ├── pages/
-        │   ├── LoginPage.tsx
-        │   ├── DashboardPage.tsx
-        │   ├── ConversationsPage.tsx
-        │   ├── ConversationDetailPage.tsx
-        │   ├── LeadsPage.tsx
-        │   ├── LeadDetailPage.tsx
-        │   ├── ProductsPage.tsx
-        │   ├── AIConfigPage.tsx
-        │   ├── AnalyticsPage.tsx
-        │   └── SettingsPage.tsx
-        └── components/
-            ├── layout/
-            │   ├── Layout.tsx        # Sidebar + content area
-            │   ├── Sidebar.tsx       # Navigation with 7 items
-            │   └── ProtectedRoute.tsx # Auth guard
-            ├── dashboard/
-            │   ├── MetricCard.tsx     # KPI with sparkline
-            │   └── CampaignHealth.tsx # Traffic light status
-            ├── conversations/
-            │   ├── ConversationList.tsx
-            │   ├── ConversationDetail.tsx
-            │   └── MessageBubble.tsx  # Chat-style messages
-            ├── leads/
-            │   ├── LeadList.tsx
-            │   └── LeadProfile.tsx
-            ├── products/
-            │   ├── ProductTable.tsx
-            │   └── ProductForm.tsx    # Modal form
-            ├── ai-config/
-            │   ├── AIConfigEditor.tsx
-            │   └── ObjectionHandlerEditor.tsx
-            ├── analytics/
-            │   ├── TrendChart.tsx
-            │   ├── FunnelChart.tsx
-            │   ├── ROIWaterfall.tsx
-            │   └── MetricCards.tsx
-            ├── settings/
-            │   └── SettingsForm.tsx
-            └── ui/
-                ├── Badge.tsx
-                ├── Button.tsx
-                ├── Input.tsx
-                ├── Select.tsx
-                ├── Modal.tsx
-                ├── Pagination.tsx
-                ├── DateRangePicker.tsx
-                └── LoadingSpinner.tsx
+        │   ├── CampaignsPage.tsx
+        │   ├── PlaygroundPage.tsx
+        │   └── … (dashboard, leads, analytics, settings)
+        └── components/leads/LeadProfile.tsx  # full subscriber + attribution fields
 ```
 
 ## Development
@@ -719,23 +796,55 @@ alembic upgrade head    # Apply all migrations
 alembic downgrade -1    # Roll back one step
 ```
 
-> **Before running in prod:** run `alembic upgrade head` to apply migration 004 (`ai_usage_events` table for per-org Claude cost tracking).
+> **Before running in prod:** run `alembic upgrade head` to apply all pending migrations.
 
 ## Cron Jobs
 
-Two background jobs keep analytics data fresh and conversations tidy. Call them on a schedule with the `X-Cron-Secret` header:
+Background work runs either via **HTTP cron endpoints** (`X-Cron-Secret`) or the **APScheduler** container (`hyros-scheduler` / `scheduler` profiles).
+
+### Essential (most deployments)
 
 ```bash
-# Mark conversations with no activity for 24+ hours as stale
-curl -X POST http://localhost:8000/api/cron/stale-conversations \
+# Stale conversations — daily
+curl -X POST https://your-domain.com/api/cron/stale-conversations \
   -H "X-Cron-Secret: $CRON_SECRET"
 
-# Aggregate yesterday's raw data into daily_analytics
-curl -X POST http://localhost:8000/api/cron/daily-digest \
+# Daily analytics rollup — daily after midnight UTC
+curl -X POST https://your-domain.com/api/cron/daily-digest \
+  -H "X-Cron-Secret: $CRON_SECRET"
+
+# Meta ad spend — daily or every few hours
+curl -X POST https://your-domain.com/api/cron/ad-spend-sync \
+  -H "X-Cron-Secret: $CRON_SECRET"
+
+# Hyros purchases — every 3 hours (or use HYROS_SYNC_SCHEDULER_ENABLED)
+curl -X POST https://your-domain.com/api/cron/hyros-sync \
+  -H "X-Cron-Secret: $CRON_SECRET"
+
+# Follow-up nudges — every 15 minutes (or use FOLLOW_UP_SCHEDULER_ENABLED)
+curl -X POST https://your-domain.com/api/cron/follow-ups \
+  -H "X-Cron-Secret: $CRON_SECRET"
+
+# Dry run: eligibility only, no ManyChat sends
+curl -X POST "https://your-domain.com/api/cron/follow-ups?dry_run=true" \
   -H "X-Cron-Secret: $CRON_SECRET"
 ```
 
-Recommended schedule: both jobs run daily at 2:00 AM UTC.
+### Self-hosted scheduler (recommended on AWS)
+
+```bash
+docker compose --profile hyros-scheduler up -d hyros-scheduler
+```
+
+Set in `.env` on the host:
+
+```
+HYROS_SYNC_SCHEDULER_ENABLED=true
+FOLLOW_UP_SCHEDULER_ENABLED=true
+CRON_SECRET=...
+```
+
+OLAP jobs (`export-ai-usage`, `archive-messages`, `check-olap-parity`) require `OLAP_SCHEDULER_ENABLED=true` and the `olap-selfhosted` profile — optional for MVP dashboard use.
 
 ## Key Metrics
 
@@ -744,8 +853,9 @@ The dashboard tracks these core KPIs:
 - **CPQC** (Cost Per Qualified Conversation) — ad spend divided by conversations that reach `consideration` stage or beyond
 - **CCR** (Conversation Conversion Rate) — percentage of conversations that result in a conversion
 - **Funnel** — subscriber volume at each buyer stage (awareness → consideration → intent → purchase)
-- **ROAS** (Return on Ad Spend) — revenue divided by ad spend
+- **ROAS** (Return on Ad Spend) — revenue divided by ad spend (Hyros purchases + Meta spend when configured)
 - **AI Performance** — fallback rate, average response time, token usage, estimated cost
+- **Hyros match rate** — purchases attributed via `attora_id` / `attora_sub` / email (see `hyros_sync_logs`)
 
 ## License
 

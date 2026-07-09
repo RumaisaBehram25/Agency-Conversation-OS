@@ -393,9 +393,9 @@ export default function CampaignsPage() {
       )}
 
       {/* Ad ID → Campaign ID lookup */}
-      <div className="mb-4 rounded-xl border border-blue-100 bg-blue-50 p-4">
-        <h2 className="mb-1 text-sm font-semibold text-blue-900">Find Campaign ID from Ad ID</h2>
-        <p className="mb-3 text-xs text-blue-700">
+      <div className="mb-4 rounded-xl border border-primary-100 bg-primary-50 p-4">
+        <h2 className="mb-1 text-sm font-semibold text-primary-900">Find Campaign ID from Ad ID</h2>
+        <p className="mb-3 text-xs text-primary-800">
           Paste the Ad ID from your spreadsheet to get the Campaign ID needed for registration.
         </p>
         <div className="flex items-center gap-2">
@@ -409,13 +409,13 @@ export default function CampaignsPage() {
               setLookupError('');
             }}
             onKeyDown={(e) => { if (e.key === 'Enter') void handleLookupAd(); }}
-            className="flex-1 rounded-md border border-blue-200 bg-white px-3 py-2 text-sm focus:border-blue-400 focus:outline-none focus:ring-1 focus:ring-blue-300"
+            className="flex-1 rounded-md border border-primary-200 bg-white px-3 py-2 text-sm focus:border-primary-400 focus:outline-none focus:ring-1 focus:ring-primary-300"
           />
           <button
             type="button"
             onClick={() => void handleLookupAd()}
             disabled={lookupLoading || !lookupAdId.trim()}
-            className="rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
+            className="rounded-md bg-primary-600 px-4 py-2 text-sm font-medium text-white hover:bg-primary-700 disabled:opacity-50"
           >
             {lookupLoading ? 'Looking up…' : 'Look up'}
           </button>
@@ -424,7 +424,7 @@ export default function CampaignsPage() {
           <p className="mt-2 text-xs text-red-700">{lookupError}</p>
         )}
         {lookupResult && (
-          <div className="mt-3 flex items-center gap-3 rounded-lg border border-blue-200 bg-white px-3 py-2">
+          <div className="mt-3 flex items-center gap-3 rounded-lg border border-primary-200 bg-white px-3 py-2">
             <div className="flex-1">
               <p className="text-xs text-gray-500">Campaign ID for ad <span className="font-mono">{lookupResult.ad_id}</span></p>
               <p className="mt-0.5 font-mono text-sm font-semibold text-gray-900">{lookupResult.campaign_id}</p>
@@ -447,7 +447,7 @@ export default function CampaignsPage() {
                 setLookupResult(null);
                 setLookupAdId('');
               }}
-              className="shrink-0 rounded-md border border-blue-300 bg-blue-50 px-3 py-1.5 text-xs font-medium text-blue-700 hover:bg-blue-100"
+              className="shrink-0 rounded-md border border-primary-300 bg-primary-50 px-3 py-1.5 text-xs font-medium text-primary-800 hover:bg-primary-100"
             >
               Use in register form
             </button>
@@ -486,7 +486,7 @@ export default function CampaignsPage() {
               }
               className={
                 newCampaign.source_type === 'paid'
-                  ? 'bg-blue-600 px-3 py-1.5 text-white'
+                  ? 'bg-primary-600 px-3 py-1.5 text-white'
                   : 'bg-white px-3 py-1.5 text-gray-700 hover:bg-gray-50'
               }
             >
@@ -580,7 +580,7 @@ export default function CampaignsPage() {
           <button
             type="submit"
             disabled={creating}
-            className="rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-60"
+            className="rounded-md bg-primary-600 px-4 py-2 text-sm font-medium text-white hover:bg-primary-700 disabled:opacity-60"
           >
             {creating ? 'Registering...' : 'Register'}
           </button>
@@ -660,7 +660,7 @@ export default function CampaignsPage() {
                         className={
                           c.source_type === 'organic'
                             ? 'rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-800'
-                            : 'rounded-full bg-blue-100 px-2 py-0.5 text-xs font-medium text-blue-800'
+                            : 'rounded-full bg-primary-100 px-2 py-0.5 text-xs font-medium text-primary-900'
                         }
                       >
                         {c.source_type === 'organic' ? 'Organic' : 'Paid'}
@@ -737,16 +737,16 @@ export default function CampaignsPage() {
                                 }}
                                 disabled={metaIdSaving}
                                 placeholder="Campaign ID"
-                                className="w-36 rounded-md border border-gray-300 bg-white px-2 py-1 font-mono text-xs focus:border-blue-400 focus:outline-none focus:ring-1 focus:ring-blue-300"
+                                className="w-36 rounded-md border border-gray-300 bg-white px-2 py-1 font-mono text-xs focus:border-primary-400 focus:outline-none focus:ring-1 focus:ring-primary-300"
                               />
-                              <button type="button" onClick={() => void saveMetaCampaignId(c.id)} disabled={metaIdSaving} className="rounded-md border border-blue-300 bg-blue-50 px-2 py-1 text-xs font-medium text-blue-700 hover:bg-blue-100 disabled:opacity-60">{metaIdSaving ? '…' : 'Save'}</button>
+                              <button type="button" onClick={() => void saveMetaCampaignId(c.id)} disabled={metaIdSaving} className="rounded-md border border-primary-300 bg-primary-50 px-2 py-1 text-xs font-medium text-primary-800 hover:bg-primary-100 disabled:opacity-60">{metaIdSaving ? '…' : 'Save'}</button>
                               <button type="button" onClick={() => { setEditingMetaIdFor(null); setMetaIdDraft(''); }} disabled={metaIdSaving} className="rounded-md border border-gray-200 px-2 py-1 text-xs text-gray-600 hover:bg-gray-50">✕</button>
                             </div>
                           ) : (
                             <button
                               type="button"
                               onClick={() => { setEditingMetaIdFor(c.id); setMetaIdDraft(c.meta_campaign_id ?? ''); }}
-                              className={c.meta_campaign_id ? 'rounded-md border border-gray-200 bg-blue-50 px-2 py-1 font-mono text-xs text-blue-800 hover:border-blue-400' : 'rounded-md border border-dashed border-blue-200 bg-white px-2 py-1 text-xs font-medium text-blue-500 hover:border-blue-400'}
+                              className={c.meta_campaign_id ? 'rounded-md border border-gray-200 bg-primary-50 px-2 py-1 font-mono text-xs text-primary-900 hover:border-primary-400' : 'rounded-md border border-dashed border-primary-200 bg-white px-2 py-1 text-xs font-medium text-primary-600 hover:border-primary-400'}
                               title={c.meta_campaign_id ? 'Click to edit boost campaign ID' : 'Click to add boost campaign ID'}
                             >
                               {c.meta_campaign_id ?? '+ Add boost ID'}
@@ -770,7 +770,7 @@ export default function CampaignsPage() {
                     </td>
                     <td className="px-4 py-3">
                       {c.utm ? (
-                        <span className="rounded-full bg-blue-100 px-2 py-0.5 text-xs font-medium text-blue-800">
+                        <span className="rounded-full bg-primary-100 px-2 py-0.5 text-xs font-medium text-primary-900">
                           Set
                         </span>
                       ) : (
@@ -951,13 +951,13 @@ export default function CampaignsPage() {
             </div>
 
             {/* Preview uses same stamping as outbound DM — attora_* + utm_medium=dm */}
-            <div className="rounded-lg border border-blue-100 bg-blue-50 p-3">
+            <div className="rounded-lg border border-primary-100 bg-primary-50 p-3">
               <div className="mb-2 flex items-center justify-between gap-2">
                 <div>
-                  <div className="text-xs font-semibold uppercase tracking-wider text-blue-800">
+                  <div className="text-xs font-semibold uppercase tracking-wider text-primary-900">
                     Preview as subscriber
                   </div>
-                  <p className="mt-0.5 text-[11px] text-blue-700">
+                  <p className="mt-0.5 text-[11px] text-primary-800">
                     Appends <span className="font-mono">attora_sub</span>,{' '}
                     <span className="font-mono">attora_id</span> when known,{' '}
                     and <span className="font-mono">utm_medium=dm</span> plus campaign UTMs —
@@ -972,7 +972,7 @@ export default function CampaignsPage() {
                       setPreviewSubscriberId('');
                       setPreviewError('');
                     }}
-                    className="shrink-0 rounded-md border border-blue-300 bg-white px-2 py-1 text-xs font-medium text-blue-700 hover:bg-blue-100"
+                    className="shrink-0 rounded-md border border-primary-300 bg-white px-2 py-1 text-xs font-medium text-primary-800 hover:bg-primary-100"
                   >
                     Clear preview
                   </button>
@@ -987,13 +987,13 @@ export default function CampaignsPage() {
                   onKeyDown={(e) => {
                     if (e.key === 'Enter') void handlePreviewAsSubscriber();
                   }}
-                  className="flex-1 rounded-md border border-blue-200 bg-white px-3 py-1.5 text-sm focus:border-blue-400 focus:outline-none focus:ring-1 focus:ring-blue-300"
+                  className="flex-1 rounded-md border border-primary-200 bg-white px-3 py-1.5 text-sm focus:border-primary-400 focus:outline-none focus:ring-1 focus:ring-primary-300"
                 />
                 <button
                   type="button"
                   onClick={() => void handlePreviewAsSubscriber()}
                   disabled={previewLoading || !previewSubscriberId.trim()}
-                  className="shrink-0 rounded-md bg-blue-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+                  className="shrink-0 rounded-md bg-primary-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-primary-700 disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   {previewLoading ? 'Loading…' : 'Preview'}
                 </button>
@@ -1002,7 +1002,7 @@ export default function CampaignsPage() {
                 <div className="mt-2 text-xs text-red-700">{previewError}</div>
               )}
               {previewUtm && (
-                <div className="mt-2 text-[11px] font-medium text-blue-800">
+                <div className="mt-2 text-[11px] font-medium text-primary-900">
                   Showing URLs tagged for <span className="font-mono">{previewSubscriberId.trim()}</span>
                 </div>
               )}
@@ -1032,7 +1032,7 @@ export default function CampaignsPage() {
                       href={generated ?? undefined}
                       target="_blank"
                       rel="noreferrer"
-                      className="flex-1 break-all rounded bg-blue-50 px-2 py-1.5 font-mono text-xs text-blue-700 hover:underline"
+                      className="flex-1 break-all rounded bg-primary-50 px-2 py-1.5 font-mono text-xs text-primary-800 hover:underline"
                     >
                       {generated}
                     </a>
@@ -1131,7 +1131,7 @@ export default function CampaignsPage() {
               <button
                 type="submit"
                 disabled={utmSaving}
-                className="rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-60"
+                className="rounded-md bg-primary-600 px-4 py-2 text-sm font-medium text-white hover:bg-primary-700 disabled:opacity-60"
               >
                 {utmSaving ? 'Saving...' : 'Save'}
               </button>

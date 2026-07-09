@@ -7,11 +7,11 @@ interface FunnelChartProps {
 }
 
 const stageColors: Record<string, string> = {
-  conversations: 'bg-blue-500',
+  conversations: 'bg-primary-500',
   qualified: 'bg-purple-500',
   converted: 'bg-green-600',
-  awareness: 'bg-blue-400',
-  consideration: 'bg-indigo-500',
+  awareness: 'bg-primary-400',
+  consideration: 'bg-primary-600',
   intent: 'bg-yellow-500',
   purchase: 'bg-green-500',
 };

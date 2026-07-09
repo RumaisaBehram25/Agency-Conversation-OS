@@ -543,6 +543,14 @@ def test_subscriber_contracts(client):
         hyros_purchased=False,
         hyros_product=None,
         hyros_synced_at=None,
+        ctwa_clid=None,
+        ad_id=None,
+        post_id=None,
+        ad_set_id=None,
+        campaign_id=None,
+        attora_campaign_id=None,
+        last_user_message_at=None,
+        history=None,
     )
     detail_subscriber = SimpleNamespace(
         id=subscriber.id,
@@ -578,6 +586,14 @@ def test_subscriber_contracts(client):
         hyros_traffic_source=None,
         hyros_creative_name=None,
         hyros_synced_at=None,
+        ctwa_clid=None,
+        ad_id=None,
+        post_id=None,
+        ad_set_id=None,
+        campaign_id=None,
+        attora_campaign_id=None,
+        last_user_message_at=None,
+        history=None,
         conversations=[
             SimpleNamespace(
                 id=uuid.uuid4(),
@@ -587,6 +603,10 @@ def test_subscriber_contracts(client):
                 started_at=datetime(2026, 4, 1, tzinfo=timezone.utc),
                 last_activity_at=datetime(2026, 4, 2, tzinfo=timezone.utc),
                 created_at=datetime(2026, 4, 1, tzinfo=timezone.utc),
+                summary=None,
+                closed_at=None,
+                follow_up_attempts=0,
+                last_follow_up_at=None,
             )
         ],
     )

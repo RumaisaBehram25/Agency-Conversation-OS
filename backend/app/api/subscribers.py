@@ -223,6 +223,10 @@ async def get_subscriber(
             message_count=conv.message_count,
             started_at=conv.started_at,
             last_activity_at=conv.last_activity_at,
+            summary=conv.summary,
+            closed_at=conv.closed_at,
+            follow_up_attempts=conv.follow_up_attempts,
+            last_follow_up_at=conv.last_follow_up_at,
         )
         for conv in sorted(subscriber.conversations, key=lambda c: c.created_at, reverse=True)
     ]
@@ -259,6 +263,14 @@ async def get_subscriber(
         utm_medium=subscriber.utm_medium,
         utm_campaign=subscriber.utm_campaign,
         utm_content=subscriber.utm_content,
+        ctwa_clid=subscriber.ctwa_clid,
+        ad_id=subscriber.ad_id,
+        post_id=subscriber.post_id,
+        ad_set_id=subscriber.ad_set_id,
+        campaign_id=subscriber.campaign_id,
+        attora_campaign_id=subscriber.attora_campaign_id,
+        last_user_message_at=subscriber.last_user_message_at,
+        history=subscriber.history,
         created_at=subscriber.created_at,
         updated_at=subscriber.updated_at,
         conversations=conversation_summaries,

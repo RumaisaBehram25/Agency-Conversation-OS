@@ -33,7 +33,7 @@ export default function AnalyticsMetricCards({
       label: 'Hyros Confirmed Purchases',
       value: hyrosConfirmedPurchases.toLocaleString(),
       description: 'Purchases confirmed via Hyros attribution',
-      color: 'border-blue-200 bg-blue-50',
+      color: 'border-primary-200 bg-primary-50',
     },
     {
       label: 'Cost per Purchase',

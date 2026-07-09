@@ -293,7 +293,7 @@ export default function PlaygroundPage() {
                                     ([key, url]) => (
                                       <div key={key} className="break-all">
                                         <span className="text-gray-500">{key}:</span>{' '}
-                                        <span className="text-blue-700">{url}</span>
+                                        <span className="text-primary-700">{url}</span>
                                       </div>
                                     ),
                                   )}

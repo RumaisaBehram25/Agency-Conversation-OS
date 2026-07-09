@@ -423,7 +423,7 @@ export default function AnalyticsPage() {
                       ? opt === 'organic'
                         ? 'bg-emerald-600 px-3 py-1.5 text-white'
                         : opt === 'paid'
-                          ? 'bg-blue-600 px-3 py-1.5 text-white'
+                          ? 'bg-primary-600 px-3 py-1.5 text-white'
                           : 'bg-gray-900 px-3 py-1.5 text-white'
                       : 'bg-white px-3 py-1.5 text-gray-700 hover:bg-gray-50'
                   }
@@ -477,7 +477,7 @@ export default function AnalyticsPage() {
                   const match = filteredOptions.find((o) => o.value === v);
                   if (match) setSelectedCampaignSource(match.source);
                 }}
-                className="w-64 rounded-md border border-gray-300 bg-white px-3 py-2 text-sm focus:border-blue-400 focus:outline-none focus:ring-1 focus:ring-blue-300"
+                className="w-64 rounded-md border border-gray-300 bg-white px-3 py-2 text-sm focus:border-primary-400 focus:outline-none focus:ring-1 focus:ring-primary-300"
               >
                 <option value="">All Campaigns</option>
                 {sourceFilter !== 'organic' && paidOptions.length > 0 && (

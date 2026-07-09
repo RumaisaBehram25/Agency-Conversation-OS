@@ -125,7 +125,7 @@ export default function SourceBreakdownTable({ rows }: SourceBreakdownTableProps
               return (
                 <tr
                   key={`${displaySource(row.traffic_source)}-${idx}`}
-                  className={`border-b border-gray-50 ${highlight ? 'bg-indigo-50/80' : ''}`}
+                  className={`border-b border-gray-50 ${highlight ? 'bg-primary-50/80' : ''}`}
                 >
                   <td className="py-2 pr-3 font-medium text-gray-900">{displaySource(row.traffic_source)}</td>
                   <td className="py-2 pr-3 tabular-nums">{row.purchases_count}</td>

@@ -5,6 +5,7 @@ Main application entry point. Configures middleware, CORS, routes,
 error handling, and lifecycle events.
 """
 
+import utils.session
 import logging
 import uuid
 from contextlib import asynccontextmanager
